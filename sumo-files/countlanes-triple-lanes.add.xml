@@ -1,0 +1,14 @@
+<additional>
+	<laneAreaDetector id="id_E0_0" lane="E0_0" period="40" file="/home/bishal/Programming/python-virtual-environments/rl-environment/logging_outputs/log-output-no-rl-1668660110.735033.xml"/>
+	<laneAreaDetector id="id_E0_1" lane="E0_1" period="40" file="/home/bishal/Programming/python-virtual-environments/rl-environment/logging_outputs/log-output-no-rl-1668660110.735033.xml"/>
+	<laneAreaDetector id="id_E0_2" lane="E0_2" period="40" file="/home/bishal/Programming/python-virtual-environments/rl-environment/logging_outputs/log-output-no-rl-1668660110.735033.xml"/>
+	<laneAreaDetector id="id_-E1_0" lane="-E1_0" period="40" file="/home/bishal/Programming/python-virtual-environments/rl-environment/logging_outputs/log-output-no-rl-1668660110.735033.xml"/>
+	<laneAreaDetector id="id_-E1_1" lane="-E1_1" period="40" file="/home/bishal/Programming/python-virtual-environments/rl-environment/logging_outputs/log-output-no-rl-1668660110.735033.xml"/>
+	<laneAreaDetector id="id_-E1_2" lane="-E1_2" period="40" file="/home/bishal/Programming/python-virtual-environments/rl-environment/logging_outputs/log-output-no-rl-1668660110.735033.xml"/>
+	<laneAreaDetector id="id_-E2_0" lane="-E2_0" period="40" file="/home/bishal/Programming/python-virtual-environments/rl-environment/logging_outputs/log-output-no-rl-1668660110.735033.xml"/>
+	<laneAreaDetector id="id_-E2_1" lane="-E2_1" period="40" file="/home/bishal/Programming/python-virtual-environments/rl-environment/logging_outputs/log-output-no-rl-1668660110.735033.xml"/>
+	<laneAreaDetector id="id_-E2_2" lane="-E2_2" period="40" file="/home/bishal/Programming/python-virtual-environments/rl-environment/logging_outputs/log-output-no-rl-1668660110.735033.xml"/>
+	<laneAreaDetector id="id_-E3_0" lane="-E3_0" period="40" file="/home/bishal/Programming/python-virtual-environments/rl-environment/logging_outputs/log-output-no-rl-1668660110.735033.xml"/>
+	<laneAreaDetector id="id_-E3_1" lane="-E3_1" period="40" file="/home/bishal/Programming/python-virtual-environments/rl-environment/logging_outputs/log-output-no-rl-1668660110.735033.xml"/>
+	<laneAreaDetector id="id_-E3_2" lane="-E3_2" period="40" file="/home/bishal/Programming/python-virtual-environments/rl-environment/logging_outputs/log-output-no-rl-1668660110.735033.xml"/>
+</additional>

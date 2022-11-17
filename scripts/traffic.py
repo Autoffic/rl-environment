@@ -235,7 +235,7 @@ if __name__ == "__main__":
     if options.logging_off:
         LOG_TO_FILE = False
     if options.convert_to_csv:
-        CONVERT_LOG_TO_CSV = False
+        CONVERT_LOG_TO_CSV = True
     if options.turn_off_rl:
         RL_ON = False
 
