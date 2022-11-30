@@ -2,7 +2,7 @@ from genericpath import exists
 import random
 import os
 from pathlib import Path
-import sys
+import random
 
 '''
 This is specifically for double lane 4 way intersection.
@@ -33,19 +33,6 @@ def generate_routefile(routefile=None):
     N = NUMBER_OF_TIME_STEPS  # number of time steps
     # demand per second from different directions
     
-    pWN = 1. / 21
-    pWE = 1. / 18
-    pWS = 1. / 9
-    pNE = 1. / 28
-    pNS = 1. / 15
-    pNW = 1. / 14
-    pES = 1. / 13
-    pEW = 1. / 10.5
-    pEN = 1. / 16
-    pSW = 1. / 22
-    pSN = 1. / 7
-    pSE = 1. / 11
-
     with open(routefile, "w") as routes:
         print("""<routes>
         <vType id="typeWN" accel="0.8" decel="4.5" sigma="0.5" length="5" minGap="2.5" maxSpeed="16.67" guiShape="passenger"/>
@@ -76,6 +63,21 @@ def generate_routefile(routefile=None):
         lastVeh = 0
         vehNr = 0
         for i in range(N):
+
+            pWN = random.random()
+            pWE = random.random()
+            pWS = random.random()
+            pNE = random.random()
+            pNS = random.random()
+            pNW = random.random()
+            pES = random.random()
+            pEW = random.random()
+            pEN = random.random()
+            pSW = random.random()
+            pSN = random.random()
+            pSE = random.random()
+
+
             if random.uniform(0, 1) < pWN:
                 print('    <vehicle id="left_up_%i" type="typeWN" route="left_up" depart="%i" />' % (
                     vehNr, i), file=routes)
