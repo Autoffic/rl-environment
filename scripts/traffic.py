@@ -73,6 +73,7 @@ GENERATE_CUSTOM_ROUTE=False
 LOG_TO_FILE=True # generating log of lane vehicle stats
 CONVERT_LOG_TO_CSV=True # converting the generated log output to csv
 RL_ON = True # for turning rl on or off
+BOTH_OUTPUTS = False # for running both rl and no rl mode and generate ouput on same data
 
 YELLOW_TIME = 10
 MIN_GREEN_TIME = 30
@@ -95,7 +96,7 @@ models_path = Path(str(ROOT) + "/models").resolve()
 
 # Here, formatting is done as to create error if wrong model is selected
 # as, there won't be same model trained at exact same time and upto same timesteps
-model_path = Path(str(models_path) + "/2022_08_26_20_31_22_136701_TrafficIntersection_{}LaneGUI_ppo".format(TRAFFIC_INTERSECTION_TYPE.capitalize())).resolve()
+model_path = Path(str(models_path) + "/2022-11-22 23 03 49.442229-TrafficIntersection-{}LaneGUI-ppo-450000".format(TRAFFIC_INTERSECTION_TYPE.capitalize())).resolve()
 model = PPO.load(str(model_path))
 
 def run():
@@ -226,6 +227,8 @@ def get_options():
                         default=False, help="convert the created log xml file to csv")
     optParser.add_option("--turn-off-rl", action="store_true",
                         default=False, help="turn off the reinforcement learning inference and continue using only sumo")
+    optParser.add_option("--generate-both-outputs", action="store_true",
+                        default=False, help="generate both rl and no rl outputs with same id")
     options, args = optParser.parse_args()
     return options
 
@@ -238,50 +241,73 @@ if __name__ == "__main__":
         CONVERT_LOG_TO_CSV = True
     if options.turn_off_rl:
         RL_ON = False
-
-    # this script has been called from the command line. It will start sumo as a
-    # server, then connect and run
-    if options.nogui:
-        sumoBinary = sumolib.checkBinary('sumo')
+    if options.generate_both_outputs:
+        BOTH_OUTPUTS = True
+        loops = 2
     else:
-        sumoBinary = sumolib.checkBinary('sumo-gui')
+        loops = 1
 
-    # Generating custom route file
-    if GENERATE_CUSTOM_ROUTE and TRAFFIC_INTERSECTION_TYPE == "double":
-        route_file = generate_routefile()
-
-    # Generating a additional file for logging
     if LOG_TO_FILE:
         if not os.path.exists(logging_output_folder):
             os.mkdir(logging_output_folder)
 
-        outputFile = Path(str(logging_output_folder) + \
-        f"/log-output-{'rl' if RL_ON else 'no-rl'}-{time.time()}.xml").resolve().__str__()
-        setupLaneCounting(begin = 0, end = TOTAL_TIMESTEPS,
-         trafficLightSwitchingTime=MIN_GREEN_TIME,
-         yellowLightTime=YELLOW_TIME,
-         outputFile= outputFile,
-         additionalFileGenerationPath=additional_file)
-   
-    # this is the normal way of using traci. sumo is started as a
-    # subprocess and then the python script connects and runs
-    if LOG_TO_FILE:
-        traci.start([sumoBinary,
-        "-n", net_file,
-        "-r", route_file,
-        "--time-to-teleport", time_to_teleport,
-        "-a", additional_file])
-    else:
-        traci.start([sumoBinary,
-        "-n", net_file,
-        "-r", route_file,
-        "--time-to-teleport", time_to_teleport])        
+        common_time = time.time()
 
-    run()
+    for i in range(loops):
+        if i == 1:  # turning off rl in the second loop
+            RL_ON = False
+        
+        if LOG_TO_FILE:
+            outputFile = Path(str(logging_output_folder) + \
+            f"/log-output-{'rl' if RL_ON else 'no-rl'}-{common_time}.xml").resolve().__str__()
 
-    traci.close()
+        # this script has been called from the command line. It will start sumo as a
+        # server, then connect and run
+        if options.nogui:
+            sumoBinary = sumolib.checkBinary('sumo')
+        else:
+            sumoBinary = sumolib.checkBinary('sumo-gui')
 
-    # this way is a bit hacky, but solves import error because of different modules
-    if LOG_TO_FILE and CONVERT_LOG_TO_CSV:
-        subprocess.call([Path(str(tools) + "/xml/xml2csv.py").resolve().__str__(), str(outputFile)])
+        # Generating custom route file
+        if GENERATE_CUSTOM_ROUTE and TRAFFIC_INTERSECTION_TYPE == "double":
+            route_file = generate_routefile()
+
+        # Generating a additional file for logging
+        if LOG_TO_FILE:
+            if not os.path.exists(logging_output_folder):
+                os.mkdir(logging_output_folder)
+
+            if BOTH_OUTPUTS:
+                csv_id = str(i)
+            else:
+                csv_id = ""
+
+            setupLaneCounting(begin = 0, end = TOTAL_TIMESTEPS,
+            trafficLightSwitchingTime=MIN_GREEN_TIME,
+            yellowLightTime=YELLOW_TIME,
+            outputFile= outputFile,
+            additionalFileGenerationPath=additional_file)
+    
+        # this is the normal way of using traci. sumo is started as a
+        # subprocess and then the python script connects and runs
+        if LOG_TO_FILE:
+            traci.start([sumoBinary,
+            "-n", net_file,
+            "-r", route_file,
+            "--time-to-teleport", time_to_teleport,
+            "-a", additional_file])
+        else:
+            traci.start([sumoBinary,
+            "-n", net_file,
+            "-r", route_file,
+            "--time-to-teleport", time_to_teleport])        
+
+        run()
+
+        traci.close()
+
+        # this way is a bit hacky, but solves import error because of different modules
+        if LOG_TO_FILE and CONVERT_LOG_TO_CSV:
+            subprocess.call([Path(str(tools) + "/xml/xml2csv.py").resolve().__str__(), str(outputFile)])
+            print(f"\nOutput file {outputFile} to csv successfully.")
         
