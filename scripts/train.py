@@ -55,7 +55,8 @@ def train():
 
     model = PPO("MlpPolicy", env, device="auto", verbose=1, batch_size=256, n_steps=256, n_epochs=5, tensorboard_log=log_path)
 
-    #model = PPO.load(Path(str(models_path) + "/2022-08-26 20:31:22.136701-TrafficIntersection-{}LaneGUI-ppo-300000".format(TRAFFIC_INTERSECTION_TYPE.capitalize(), modelType), env=env).resolve())
+    # model = PPO.load(Path(str(models_path) + "/2022_08_26_20_31_22_136701_TrafficIntersection_{}LaneGUI_{}".format(TRAFFIC_INTERSECTION_TYPE.capitalize(), modelType), env=env).resolve().__str__())
+    model.set_env(env)
 
     count = 1
     while count < 30:
