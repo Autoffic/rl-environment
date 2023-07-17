@@ -15,6 +15,7 @@ import sys
 from pathlib import Path
 import os
 import numpy as np
+import signal
 
 
 # Training constants
@@ -118,6 +119,14 @@ def train():
                                     deterministic=True, render=False, verbose=1)
 
     callback_list = CallbackList([eval_callback, TensorboardCallback(save_path=save_path, save_steps=5000)])
+
+    def save_on_exit(signum, frame):
+        # save the model before exiting
+        print(f"Saving to {save_path} before exiting.")
+        model.save(save_path.joinpath("exit_before_finished.zip"))
+
+    signal.signal(signal.SIGINT, save_on_exit)
+
     model.learn(total_timesteps=int(TOTAL_TIMESTEPS_FOR_MODEL), reset_num_timesteps=False, log_interval=1, tb_log_name=f"{'GUI' if use_gui else 'CLI'}-{modelType}-{startTime}", callback=callback_list)
     # saving the fully trained model
     model.save(save_path.joinpath("last_timestep.zip"))
