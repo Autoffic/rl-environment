@@ -99,7 +99,7 @@ def train():
     log_path = Path(str(ROOT) + "/logs/{}-trafficintersection-{}-lane-GUI/".format(modelType, TRAFFIC_INTERSECTION_TYPE)).resolve()
 
     # environment for training
-    env = get_env(env_name=env_name, multi=True, subprocess=True, use_gui=use_gui, n_envs=multiprocessing.cpu_count() - 2 )
+    env = get_env(env_name=env_name, multi=True, subprocess=True, use_gui=use_gui, n_envs=10 )
 
     # environment for evaluation
     eval_env = get_env(env_name=env_name, multi=True, subprocess=True, use_gui=use_gui, n_envs=2, total_timesteps=128)
