@@ -79,6 +79,8 @@ class TrafficIntersectionEnvTripleLaneGUI(gym.Env):
 
         # for reward calculation
         self.last_waiting_time: float = 0
+        # for information about vehicles
+        self.last_step_vehicle_count: float = 1  # to avoid NaN
 
         if use_gui:
             sumoBinary = sumolib.checkBinary('sumo-gui')
@@ -145,12 +147,16 @@ class TrafficIntersectionEnvTripleLaneGUI(gym.Env):
 
         reward = self.calculate_reward()
 
+        info["waiting_time"] = self.last_waiting_time
+        info["last_step_vehicle_count"] = self.last_step_vehicle_count
+
         return self.state, reward, done, info
 
     def getSimulationTime(self):
         return self.conn.simulation.getTime()
 
     def reset(self):
+
 
         if self.conn is not None:
             # generating new route file each time
@@ -207,15 +213,24 @@ class TrafficIntersectionEnvTripleLaneGUI(gym.Env):
         return total_waiting_time       
 
     def calculate_waiting_time_of_a_lane(self, lane: str) -> float:
-        last_step_vehicles_ids = traci.lane.getLastStepVehicleIDs(lane)
+        last_step_vehicles_ids = self.conn.lane.getLastStepVehicleIDs(lane)
 
         waiting_time = 0
         for vehicle in last_step_vehicles_ids:
-            waiting_time += traci.vehicle.getAccumulatedWaitingTime(vehicle)
+            waiting_time += self.conn.vehicle.getAccumulatedWaitingTime(vehicle)
 
         return waiting_time
+    
 
     def calculate_reward(self) -> float:
+
+        return self.reward_on_average_waiting_time()
+
+
+    def reward_on_decrease_in_waiting_time(self) -> float:
+        """
+            Reward based on difference in cumulative waiting time
+        """
         
         total_waiting_time = self.calculate_waiting_time()
 
@@ -223,3 +238,26 @@ class TrafficIntersectionEnvTripleLaneGUI(gym.Env):
         self.last_waiting_time = total_waiting_time
 
         return decrease_in_waiting_time
+
+    def reward_on_average_waiting_time(self) -> float:
+        """
+            reward based on inverse of waiting time * total vehicle count
+        """
+
+        # setting the vehicle count on observing lane as observation
+        lanes_observation = numpy.zeros(int(NUMBER_OF_LANES_TO_OBSERVE))
+        for i, lane in enumerate(self.lanes_to_observe):
+            lanes_observation[i] = self.conn.lane.getLastStepVehicleNumber(lane)
+
+        vehicle_count = max(1, numpy.sum(lanes_observation))  # setting a minimum value, to avoid NaNs
+        waiting_time = max(1, self.calculate_waiting_time())  # setting a minimum value, to avoid NaNs
+
+        # print(f"Last step vehicle count {self.last_step_vehicle_count}")
+        # print(f"Last step waiting time {self.last_waiting_time}")
+
+        reward = vehicle_count/waiting_time
+
+        self.last_step_vehicle_count = vehicle_count
+        self.last_waiting_time = waiting_time
+
+        return reward
