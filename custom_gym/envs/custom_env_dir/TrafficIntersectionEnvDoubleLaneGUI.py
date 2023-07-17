@@ -130,6 +130,8 @@ class TrafficIntersectionEnvDoubleLaneGUI(gym.Env):
 
         self.state = numpy.array(lanes_observation)
 
+        info["waiting_time"] = self.last_waiting_time
+
         reward = self.calculate_reward()
 
         return self.state, reward, done, info
