@@ -31,8 +31,6 @@ NUMBER_OF_LANES_TO_OBSERVE = int(TOTAL_NUMBER_OF_LANES / 2)
 
 class TrafficIntersectionEnvTripleLaneGUI(gym.Env):
 
-    CONNECTION_LABEL = 0
-
     def __init__(self, use_gui: bool = True, total_timesteps: int = 5000, delta_time: int=30, min_green: int=15, max_green: int=120, yellow_time: int=7, sumocfg_file: str = None, network_file: str = None, route_file: str = None,) -> None:
 
         SUMO_FILES = pathlib.Path(__file__).parents[0].joinpath("sumo-files")
@@ -74,9 +72,6 @@ class TrafficIntersectionEnvTripleLaneGUI(gym.Env):
                                  "-E2_0", "-E2_1", "-E2_2",
                                  "-E3_0", "-E3_1", "-E3_2"]
 
-        self.label = TrafficIntersectionEnvTripleLaneGUI.CONNECTION_LABEL
-        TrafficIntersectionEnvTripleLaneGUI.CONNECTION_LABEL += 1
-
         # for reward calculation
         self.last_waiting_time: float = 0
         # for information about vehicles
@@ -88,16 +83,19 @@ class TrafficIntersectionEnvTripleLaneGUI(gym.Env):
             sumoBinary = sumolib.checkBinary('sumo')
 
         self.sumoBinary = sumoBinary
-        self.conn: traci = None
+        self.connection_present = False
 
     def step(self, action):
+
+        if not self.connection_present:
+            self.reset()
 
         done = False
         info = {}
 
         junction_with_lights = "J1"
 
-        current_state = self.conn.trafficlight.getPhase(junction_with_lights)
+        current_state = traci.trafficlight.getPhase(junction_with_lights)
 
         turn_yellow = True
 
@@ -107,31 +105,31 @@ class TrafficIntersectionEnvTripleLaneGUI(gym.Env):
 
         # Trying to turn on yellow light
         if turn_yellow:
-            self.conn.trafficlight.setPhase(
-                junction_with_lights, current_state + 1)
+            traci.trafficlight.setPhase(
+                junction_with_lights, int(current_state + 1))
 
             delta_yellow_time = 0
             while delta_yellow_time < self.yellow_time:
 
                 # Remove if unnecessary
                 # Testing if phase duration defined in *.net.xml takes precedence over the traci.setPhase()
-                self.conn.trafficlight.setPhase(junction_with_lights, current_state + 1)
+                traci.trafficlight.setPhase(junction_with_lights, int(current_state + 1))
 
-                self.conn.simulationStep()
+                traci.simulationStep()
 
                 delta_yellow_time += 1
 
         # Setting the required phase
-        self.conn.trafficlight.setPhase(
-            junction_with_lights, action * 2)
+        traci.trafficlight.setPhase(
+            junction_with_lights, int(action * 2))
 
         delta_green_time = 0
         while delta_green_time < self.min_green:
             # Remove if unnecessary
             # Testing if phase duration defined in *.net.xml takes precedence over the traci.setPhase()
-            self.conn.trafficlight.setPhase(junction_with_lights, action * 2)
+            traci.trafficlight.setPhase(junction_with_lights, int(action * 2))
 
-            self.conn.simulationStep()
+            traci.simulationStep()
             delta_green_time += 1
 
         current_simulation_time = self.getSimulationTime()
@@ -141,7 +139,7 @@ class TrafficIntersectionEnvTripleLaneGUI(gym.Env):
 
         lanes_observation = numpy.zeros(int(NUMBER_OF_LANES_TO_OBSERVE))
         for i, lane in enumerate(self.lanes_to_observe):
-            lanes_observation[i] = self.conn.lane.getLastStepVehicleNumber(lane)
+            lanes_observation[i] = traci.lane.getLastStepVehicleNumber(lane)
 
         self.state = lanes_observation
 
@@ -153,12 +151,12 @@ class TrafficIntersectionEnvTripleLaneGUI(gym.Env):
         return self.state, reward, done, info
 
     def getSimulationTime(self):
-        return self.conn.simulation.getTime()
+        return traci.simulation.getTime()
 
     def reset(self):
 
 
-        if self.conn is not None:
+        if self.connection_present:
             # generating new route file each time
             # deleting previously created route files and saving in that same location.
 
@@ -179,20 +177,19 @@ class TrafficIntersectionEnvTripleLaneGUI(gym.Env):
             new_route_file = generate_routefile(intersection_type=TRAFFIC_INTERSECTION_TYPE, number_of_time_steps=self.total_timesteps)
             self.route_file = new_route_file
 
-            traci.switch(self.label)
             traci.close()
-            self.conn = None
+            self.connection_present = False
 
-        sumo_cmd = [self.sumoBinary,
-                    '-n', self.network_file,
-                    '-r', self.route_file,
+        sumo_cmd = [str(self.sumoBinary),
+                    '-n', str(self.network_file),
+                    '-r', str(self.route_file),
                     '--waiting-time-memory', '10000',
                     '--start', '--quit-on-end',
                     "--time-to-teleport", "-1"  # This makes it so that the vehicles won't teleport
                     ]
 
-        traci.start(sumo_cmd, label=self.label)
-        self.conn = traci.getConnection(self.label)
+        traci.start(sumo_cmd)
+        self.connection_present = True
 
         # for reward calculation
         self.last_waiting_time = 0
@@ -200,7 +197,7 @@ class TrafficIntersectionEnvTripleLaneGUI(gym.Env):
         # setting the vehicle count on observing lane as observation
         lanes_observation = numpy.zeros(int(NUMBER_OF_LANES_TO_OBSERVE))
         for i, lane in enumerate(self.lanes_to_observe):
-            lanes_observation[i] = self.conn.lane.getLastStepVehicleNumber(lane)
+            lanes_observation[i] = traci.lane.getLastStepVehicleNumber(lane)
 
         self.state = lanes_observation
 
@@ -213,11 +210,11 @@ class TrafficIntersectionEnvTripleLaneGUI(gym.Env):
         return total_waiting_time       
 
     def calculate_waiting_time_of_a_lane(self, lane: str) -> float:
-        last_step_vehicles_ids = self.conn.lane.getLastStepVehicleIDs(lane)
+        last_step_vehicles_ids = traci.lane.getLastStepVehicleIDs(lane)
 
         waiting_time = 0
         for vehicle in last_step_vehicles_ids:
-            waiting_time += self.conn.vehicle.getAccumulatedWaitingTime(vehicle)
+            waiting_time += traci.vehicle.getAccumulatedWaitingTime(vehicle)
 
         return waiting_time
     
@@ -247,7 +244,7 @@ class TrafficIntersectionEnvTripleLaneGUI(gym.Env):
         # setting the vehicle count on observing lane as observation
         lanes_observation = numpy.zeros(int(NUMBER_OF_LANES_TO_OBSERVE))
         for i, lane in enumerate(self.lanes_to_observe):
-            lanes_observation[i] = self.conn.lane.getLastStepVehicleNumber(lane)
+            lanes_observation[i] = traci.lane.getLastStepVehicleNumber(lane)
 
         vehicle_count = max(1, numpy.sum(lanes_observation))  # setting a minimum value, to avoid NaNs
         waiting_time = max(1, self.calculate_waiting_time())  # setting a minimum value, to avoid NaNs
