@@ -74,10 +74,9 @@ class TensorboardCallback(BaseCallback):
 
     def _on_step(self) -> bool:
         
-        if self.num_timesteps % self.save_steps == 0 and np.average(self.locals["rewards"]) > self.max_reward:
-            self.max_reward = max(self.max_reward, np.average(self.locals["rewards"]))
-            self.model.save(f"{self.save_path}-{self.num_timesteps}")
         self.logger.record("training:avg_reward", np.average(self.locals["rewards"]))
+        self.logger.record("training:waiting_time", np.average([ info["waiting_time"] for info in self.locals["infos"]]))
+        self.logger.record("training:vehicle_count", np.average([ info["last_step_vehicle_count"] for info in self.locals["infos"]]))
 
 
 def train():
@@ -114,13 +113,14 @@ def train():
 
     save_path = Path(str(models_path) + "/{}-TrafficIntersection-{}LaneGUI-{}".format(startTime, TRAFFIC_INTERSECTION_TYPE.capitalize(), modelType)).resolve()
 
-    # Use deterministic actions for evaluation
-    eval_callback = EvalCallback(eval_env, eval_freq=256, log_path=log_path,
+    # Use deterministic actions for evaluation   # Also saving the best model
+    eval_callback = EvalCallback(eval_env, eval_freq=256, log_path=log_path, best_model_save_path=save_path,
                                     deterministic=True, render=False, verbose=1)
 
     callback_list = CallbackList([eval_callback, TensorboardCallback(save_path=save_path, save_steps=5000)])
     model.learn(total_timesteps=int(TOTAL_TIMESTEPS_FOR_MODEL), reset_num_timesteps=False, log_interval=1, tb_log_name=f"{'GUI' if use_gui else 'CLI'}-{modelType}-{startTime}", callback=callback_list)
-
+    # saving the fully trained model
+    model.save(save_path.joinpath("last_timestep.zip"))
 
 
 if __name__=="__main__":
