@@ -20,7 +20,9 @@ from sumo.tools import traci
 import gym
 import numpy
 
-from generateRouteFile import generate_routefile
+from .generateRouteFile import generate_routefile
+
+import pathlib
 
 TRAFFIC_INTERSECTION_TYPE = "double"
 file_separator = os.path.sep
@@ -33,8 +35,22 @@ class TrafficIntersectionEnvDoubleLaneGUI(gym.Env):
 
     CONNECTION_LABEL =0
 
-    def __init__(self, sumocfg_file, network_file, route_file, use_gui=True, total_timesteps=5000, delta_time=30, min_green=15, max_green=120, yellow_time=7) -> None:
+    def __init__(self, use_gui=True, total_timesteps=5000, delta_time=30, min_green=15, max_green=120, yellow_time=7, 
+                sumocfg_file: pathlib.Path | None =  None, network_file: pathlib.Path | None =  None, route_file: pathlib.Path | None =  None) -> None:
         super().__init__()
+
+        SUMO_FILES = pathlib.Path(__file__).parents[0].joinpath("sumo-files")
+        SMALL_MAP_DOUBLE_LANE = SUMO_FILES.joinpath(f"small-map-{TRAFFIC_INTERSECTION_TYPE}-lane")
+
+        # keeping track for deleting other route files created
+        self.passed_route_file = route_file
+
+        if sumocfg_file is None:
+            sumocfg_file = pathlib.Path(str(SMALL_MAP_DOUBLE_LANE) + ".sumocfg")
+        if network_file is None:
+            network_file = pathlib.Path(str(SMALL_MAP_DOUBLE_LANE) + ".net.xml")
+        if route_file is None:
+            route_file = pathlib.Path(str(SMALL_MAP_DOUBLE_LANE) + ".rou.xml")
 
         self.sumocfg_file = sumocfg_file
         self.network_file = network_file
@@ -126,12 +142,20 @@ class TrafficIntersectionEnvDoubleLaneGUI(gym.Env):
         if self.conn is not None:
         
             # generating new route file each time
-            # and not touching the previous route file but saving in that same location.
+            # deleting previously created route files and saving in that same location.
 
-            route_file_dir = self.route_file.rsplit(file_separator, 1)[0]
-            new_route_file = route_file_dir + file_separator + "{}-route.rou.xml".format(self.getSimulationTime())
+            route_file_dir = str(self.route_file).rsplit(file_separator, 1)[0]
 
-            generate_routefile(new_route_file)
+            SUMO_FILES = pathlib.Path(__file__).parents[0].joinpath("sumo-files")
+            SMALL_MAP_DOUBLE_LANE = SUMO_FILES.joinpath(f"small-map-{TRAFFIC_INTERSECTION_TYPE}-lane")
+
+            # deleting old route file 
+            if self.route_file != pathlib.Path(str(SMALL_MAP_DOUBLE_LANE) + ".rou.xml") and self.route_file != self.passed_route_file:
+                os.remove(self.route_file)
+
+            new_route_file = route_file_dir + file_separator + "{}-{}-route.rou.xml".format(self.CONNECTION_LABEL, TRAFFIC_INTERSECTION_TYPE)
+
+            new_route_file = generate_routefile(intersection_type=TRAFFIC_INTERSECTION_TYPE, routefile=new_route_file, number_of_time_steps=self.total_timesteps)
 
             self.route_file = new_route_file
 
