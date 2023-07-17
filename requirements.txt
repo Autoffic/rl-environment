@@ -13,3 +13,4 @@ tensorboard-data-server
 tensorboard-plugin-wit
 torch
 libsumo
+shimmy>=0.2.1
