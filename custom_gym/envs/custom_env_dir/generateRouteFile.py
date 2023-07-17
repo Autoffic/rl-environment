@@ -159,7 +159,7 @@ def generate_routefile(intersection_type: str, routefile=None, number_of_time_st
         interval_range = interval_end - interval_begin
 
         # choice pool for probabilities
-        occurances = [max(int(random.random() * 0.5 * interval_range), 101) for _ in range(number_of_choices)] 
+        occurances = [max(int(random.random() * 0.25 * interval_range), 101) for _ in range(number_of_choices)] 
 
         # number of vehicles
         from_left = random.randrange(100, random.choice(occurances))
