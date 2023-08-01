@@ -1,5 +1,6 @@
+stable-baselines3==1.8.0
 eclipse-sumo
-gym
+gymnasium
 gym-notices
 matplotlib
 numpy
@@ -7,10 +8,9 @@ opencv-python
 panda
 pygame
 pytz
-stable-baselines3
 tensorboard
 tensorboard-data-server
 tensorboard-plugin-wit
 torch
 libsumo
-shimmy>=0.2.1
+shimmy
