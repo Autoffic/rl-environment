@@ -33,7 +33,9 @@ import numpy
 from generateRouteFile import generate_routefile
 from setupLaneCounting import setupLaneCounting
 
-from multiprocessing import Process
+from multiprocessing import Process, set_start_method
+
+import tensorflow as tf
 
 # checking for sumo_home variable and exiting if it is not found
 if 'SUMO_HOME' in os.environ:
@@ -69,7 +71,7 @@ ROOT = Path(os.path.relpath(ROOT, Path.cwd()))  # relative
 
 # constants
 TRAFFIC_INTERSECTION_TYPE="triple"
-TOTAL_TIMESTEPS=500000  # This is the sumo timestep which is somewhat independent of steps in simulation
+TOTAL_TIMESTEPS=500000  # This is the sumo timestep which is somewhat independent of steps taken by model in simulation
                        # rather this decides the number of steps in the simulation
 GENERATE_CUSTOM_ROUTE=False
 LOG_TO_FILE=True # generating log of lane vehicle stats
@@ -99,16 +101,18 @@ models_path = Path(str(ROOT) + "/models").resolve()
 
 # Here, formatting is done as to create error if wrong model is selected
 # as, there won't be same model trained at exact same time and upto same timesteps
-model_path = Path(str(models_path) + "/2022-12-01 02 08 35.370858-TrafficIntersection-{}LaneGUI-ppo-1925000".format(TRAFFIC_INTERSECTION_TYPE.capitalize())).resolve()
+model_path = Path(str(models_path) + "/2023-07-26 10:02:16.560831-TrafficIntersection-{}LaneGUI-ppo/last_timestep.zip".format(TRAFFIC_INTERSECTION_TYPE.capitalize())).resolve()
 model = PPO.load(str(model_path))
 
 def run(use_rl: bool = False, connection_label = None):
 
     time_spent_on_inference = 0
 
-    # choosing the given connection for traffic light switching
-    if connection_label is not None:
-        traci.switch(connection_label)
+    # is libsumo isn't used
+    if "LIBSUMO_AS_TRACI" not in os.environ or os.environ["LIBSUMO_AS_TRACI"] != '1':
+        # choosing the given connection for traffic light switching
+        if connection_label is not None:
+            traci.switch(connection_label)
 
     step = 0
     if not use_rl:  # if rl is turned off the continue without intervention
@@ -290,7 +294,8 @@ def start_logging(use_rl: bool, log_to_file: bool, nogui: bool = True, unique_id
 
     run(use_rl=use_rl,connection_label=connection_label)
 
-    traci.switch(connection_label)
+    if "LIBSUMO_AS_TRACI" not in os.environ or os.environ["LIBSUMO_AS_TRACI"] != '1':
+        traci.switch(connection_label)
     traci.close()
 
     if log_to_file:
@@ -304,8 +309,8 @@ def convert_to_csv(filename: str):
     global LOG_TO_FILE, CONVERT_LOG_TO_CSV
     # this way is a bit hacky, but solves import error because of different modules
     if LOG_TO_FILE and CONVERT_LOG_TO_CSV:
-        subprocess.call([Path(str(tools) + "/xml/xml2csv.py").resolve().__str__(), str(filename)])
-        print(f"\nOutput file {filename} to csv successfully.")
+        subprocess.call([Path(str(tools)).joinpath("xml").joinpath("xml2csv.py").resolve().__str__(), str(filename)])
+        print(f"\nConverted output file {filename} to csv successfully.")
 
 
 def get_options():
@@ -324,6 +329,16 @@ def get_options():
     return options
 
 def start(nogui=True, logging_off=False, convert_to_csv=True, turn_off_rl=False, generate_both_outputs=True):
+
+    # for checking availability of gpu
+    gpus = tf.config.list_physical_devices('GPU')   
+    
+    if len(gpus) > 0:  # for use with gpu
+        start_method = 'spawn'
+    else:
+        start_method = "fork" if sys.platform=="linux" else "forkserver"
+
+    set_start_method(start_method)
 
     global LOG_TO_FILE, CONVERT_LOG_TO_CSV, RL_ON, BOTH_OUTPUTS
 
