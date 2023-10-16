@@ -6,12 +6,11 @@ from stable_baselines3.common.monitor import Monitor
 from stable_baselines3.common.vec_env.subproc_vec_env import SubprocVecEnv
 from stable_baselines3.common.vec_env.dummy_vec_env import DummyVecEnv
 from stable_baselines3.common.callbacks import BaseCallback
-import gym
-import tensorflow as tf
+import gymnasium as gym
 import multiprocessing
 from stable_baselines3.common.callbacks import EvalCallback, CallbackList
 
-from datetime import date, datetime
+from datetime import datetime
 
 import sys
 from pathlib import Path
@@ -44,7 +43,7 @@ def get_env(env_name = "TrafficIntersectionEnv{}LaneGUI-v1".format(TRAFFIC_INTER
 
     # startmethod based on the platform, fork for linux and forkserver for windows
     # see: https://docs.python.org/3/library/multiprocessing.html#the-spawn-and-forkserver-start-methods
-    start_method = "fork" if sys.platform=="linux" else "forkserver"
+    start_method = "fork" if sys.platform=="linux" else "spawn"
 
     if multi:
         if subprocess:
@@ -116,11 +115,11 @@ def train():
 
     env_kwargs = {
         "multi": True,
-        "subprocess": True
+        "subprocess": False
     }
 
     # environment for training
-    env = get_env(env_name=env_name, **env_kwargs, use_gui=use_gui, n_envs=2 , generate_new_route_files=False)
+    env = get_env(env_name=env_name, **env_kwargs, use_gui=use_gui, n_envs=5, generate_new_route_files=False)
 
     # environment for evaluation
     eval_env = get_env(env_name=env_name, **env_kwargs, use_gui=use_gui, n_envs=2, total_timesteps=128)
@@ -132,7 +131,8 @@ def train():
     # model = PPO.load(Path(str(models_path) + "/2022_08_26_20_31_22_136701_TrafficIntersection_{}LaneGUI_{}".format(TRAFFIC_INTERSECTION_TYPE.capitalize(), modelType), env=env).resolve().__str__())
     model.set_env(env)
 
-    save_path = Path(str(models_path) + "/{}-TrafficIntersection-{}LaneGUI-{}".format(startTime, TRAFFIC_INTERSECTION_TYPE.capitalize(), modelType)).resolve()
+    # ':' isn't a valid file name in windows, since it is used to distinguish drive
+    save_path = Path(str(models_path) + "/{}-TrafficIntersection-{}LaneGUI-{}".format(startTime, TRAFFIC_INTERSECTION_TYPE.capitalize(), modelType).replace(":", "_")).resolve()
 
     # Use deterministic actions for evaluation   # Also saving the best model
     eval_callback = EvalCallback(eval_env, eval_freq=256, log_path=log_path, best_model_save_path=save_path,
@@ -142,11 +142,13 @@ def train():
         # save the model before exiting
         print(f"Saving to {save_path} before exiting.")
         model.save(save_path.joinpath("exit_before_finished.zip"))
+        exit(0)
 
     signal.signal(signal.SIGINT, save_on_exit)
 
     callback_list = CallbackList([eval_callback, TensorboardCallback(save_path=save_path, log_path=log_path, save_steps=5000)])
-    model.learn(total_timesteps=int(TOTAL_TIMESTEPS_FOR_MODEL), reset_num_timesteps=False, log_interval=1, tb_log_name=f"{'GUI' if use_gui else 'CLI'}-{modelType}-{startTime}", callback=callback_list)
+    # ':' isn't a valid name in windows since it is used to differentiate drive
+    model.learn(total_timesteps=int(TOTAL_TIMESTEPS_FOR_MODEL), reset_num_timesteps=False, log_interval=1, tb_log_name=f"{'GUI' if use_gui else 'CLI'}-{modelType}-{startTime}".replace(":", "_"), callback=callback_list)
     # saving the fully trained model
     model.save(save_path.joinpath("last_timestep.zip"))
 

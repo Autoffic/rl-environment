@@ -35,7 +35,7 @@ from setupLaneCounting import setupLaneCounting
 
 from multiprocessing import Process, set_start_method
 
-import tensorflow as tf
+import torch
 
 # checking for sumo_home variable and exiting if it is not found
 if 'SUMO_HOME' in os.environ:
@@ -329,11 +329,12 @@ def get_options():
     return options
 
 def start(nogui=True, logging_off=False, convert_to_csv=True, turn_off_rl=False, generate_both_outputs=True):
+    
 
     # for checking availability of gpu
-    gpus = tf.config.list_physical_devices('GPU')   
+    gpu_available = torch.cuda.is_available()   
     
-    if len(gpus) > 0:  # for use with gpu
+    if gpu_available:  # for use with gpu
         start_method = 'spawn'
     else:
         start_method = "fork" if sys.platform=="linux" else "forkserver"

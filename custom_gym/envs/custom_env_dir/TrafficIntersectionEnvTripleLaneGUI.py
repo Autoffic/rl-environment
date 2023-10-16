@@ -15,8 +15,9 @@ else:
 import sumo
 import sumo.tools.sumolib as sumolib
 from sumo.tools import traci
-import gym
+import gymnasium as gym
 import numpy
+from typing import Any
 
 from .generateRouteFile import generate_routefile
 
@@ -58,6 +59,7 @@ class TrafficIntersectionEnvTripleLaneGUI(gym.Env):
         self.observation_space = gym.spaces.Box(low=0, high=1000, shape=(
             int(NUMBER_OF_LANES_TO_OBSERVE), ), dtype=numpy.float64)
         self.state = numpy.zeros(int(NUMBER_OF_LANES_TO_OBSERVE))
+        self.render_mode = None
 
         self.total_timesteps = total_timesteps
         self.delta_time = delta_time
@@ -178,12 +180,16 @@ class TrafficIntersectionEnvTripleLaneGUI(gym.Env):
         info["last_step_vehicle_count"] = self.last_step_vehicle_count
         info["vehicle_entered"] = self.total_vehicle_count - self.vehicle_count_up_to_last_step
 
-        return self.state, reward, done, info
+        terminated = done
+        truncated = False
+
+        return self.state, reward, terminated, truncated, info
 
     def getSimulationTime(self):
         return self.conn.simulation.getTime()
 
-    def reset(self):
+    def reset(self, seed: int | None = None, options: dict[str, Any] | None = None):
+
         if not self.libsumo_as_traci and self.connection_present:
             traci.switch(self.connection_label)
 
@@ -247,7 +253,12 @@ class TrafficIntersectionEnvTripleLaneGUI(gym.Env):
 
         self.state = lanes_observation
 
-        return self.state
+        info = {}
+        info["waiting_time"] = self.last_waiting_time
+        info["last_step_vehicle_count"] = self.last_step_vehicle_count
+        info["vehicle_entered"] = self.total_vehicle_count - self.vehicle_count_up_to_last_step
+
+        return (self.state, info)
 
     def calculate_waiting_time(self) -> float:
         total_waiting_time = 0
