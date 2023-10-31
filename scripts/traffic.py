@@ -162,17 +162,18 @@ def run(use_rl: bool = False, connection_label=None, unique_identifier: str | No
     step = 0
     if not use_rl:  # if rl is turned off the continue without intervention
         print("\n Reinforcement Learning is Off. \n")
-        traci.poi.add(
-            poiID="RL_Info",
-            x=2292,
-            y=-136.47,
-            height=100,
-            width=200,
-            color=(255, 255, 255),
-            imgFile=SUMO_DIRECTORY.joinpath("traditional_method.png")
-            .resolve()
-            .__str__(),
-        )
+        if use_gui:
+            traci.poi.add(
+                poiID="RL_Info",
+                x=2292,
+                y=-136.47,
+                height=100,
+                width=200,
+                color=(255, 255, 255),
+                imgFile=SUMO_DIRECTORY.joinpath("traditional_method.png")
+                .resolve()
+                .__str__(),
+            )
         while step < TOTAL_TIMESTEPS:
             if step == 0:  # setting the initial configuration
                 if TRAFFIC_INTERSECTION_TYPE == "single":
@@ -262,17 +263,18 @@ def run(use_rl: bool = False, connection_label=None, unique_identifier: str | No
 
             step = traci.simulation.getTime()
     else:
-        traci.poi.add(
-            poiID="RL_Info",
-            x=2292,
-            y=-136.47,
-            height=100,
-            width=200,
-            color=(255, 255, 255),
-            imgFile=SUMO_DIRECTORY.joinpath("reinforcement_learning.png")
-            .resolve()
-            .__str__(),
-        )
+        if use_gui:
+            traci.poi.add(
+                poiID="RL_Info",
+                x=2292,
+                y=-136.47,
+                height=100,
+                width=200,
+                color=(255, 255, 255),
+                imgFile=SUMO_DIRECTORY.joinpath("reinforcement_learning.png")
+                .resolve()
+                .__str__(),
+            )
         print("\n Reinforcement Learning is On. \n")
         while step < TOTAL_TIMESTEPS:
             if step == 0:  # setting the initial configuration
