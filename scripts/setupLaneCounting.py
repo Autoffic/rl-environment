@@ -2,12 +2,11 @@ import time
 from pathlib import Path
 import sys
 
-import generateRouteFile
 import train
 import os
 
 startTime:int = 0
-endTime:int = generateRouteFile.NUMBER_OF_TIME_STEPS
+endTime:int = 500000
 
 trafficLightSwitchingTime: int = train.MIN_GREEN_TIME
 yellowLightTime: int = train.YELLOW_TIME
