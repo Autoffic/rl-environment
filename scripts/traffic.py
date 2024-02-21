@@ -128,7 +128,7 @@ models_path = Path(str(ROOT) + "/models").resolve()
 # as, there won't be same model trained at exact same time and upto same timesteps
 model_path = Path(
     str(models_path)
-    + "/2023-10-16 13_32_18.238482-TrafficIntersection-{}LaneGUI-ppo_exit_before_finished.zip".format(
+    + "/2023-10-31 10_18_11.112768-TrafficIntersection-{}LaneGUI-ppo-last_timestep.zip".format(
         TRAFFIC_INTERSECTION_TYPE.capitalize()
     )
 ).resolve()
@@ -406,7 +406,7 @@ def run(use_rl: bool = False, connection_label=None, unique_identifier: str | No
                         delta_yellow_time += 1
             else:
                 undefined_intersection = True
-                print(f"The given insercetion {TRAFFIC_INTERSECTION_TYPE} is not defined.")
+                print(f"The given intersection {TRAFFIC_INTERSECTION_TYPE} is not defined.")
 
             # finding out waiting time
             if LOG_TO_FILE and LOG_WAITING_TIME and not undefined_intersection:
@@ -484,7 +484,7 @@ def start_logging(
 
     # this is the normal way of using traci. sumo is started as a
     # subprocess and then the python script connects and runs
-    if log_to_file:
+    if log_to_file and LOG_PERCENTAGE_VEHICLE_PASSING:
         traci.start(
             [
                 sumoBinary,
@@ -519,10 +519,10 @@ def start_logging(
         traci.switch(connection_label)
     traci.close()
 
-    if convert_to_csv:
+    if LOG_PERCENTAGE_VEHICLE_PASSING and convert_to_csv:
         convert_to_csv(output_file)
 
-    return output_file if log_to_file else None
+    return output_file if (log_to_file and LOG_PERCENTAGE_VEHICLE_PASSING) else None
 
 
 def convert_to_csv(filename: str):
@@ -634,17 +634,19 @@ def start(
     elif not turn_off_rl:
         output_file = start_logging(**rl_kwargs)
 
-        if output_file is not None:
-            print(f"Generation of {output_file} succeded!")
-        else:
-            print(f"Generation of CSV failed!")
+        if LOG_TO_FILE and log_percentage_vehicle_passing:
+          if output_file is not None:
+              print(f"Generation of {output_file} succeded!")
+          else:
+              print(f"Generation of CSV failed!")
     else:
         output_file = start_logging(**no_rl_kwargs)
 
-        if output_file is not None:
-            print(f"Generation of {output_file} succeded!")
-        else:
-            print(f"Generation of CSV failed!")
+        if LOG_TO_FILE and log_percentage_vehicle_passing:
+          if output_file is not None:
+              print(f"Generation of {output_file} succeded!")
+          else:
+              print(f"Generation of CSV failed!")
 
 
 def calculate_waiting_time(lanes_to_observe: [str], conn: traci) -> float:
