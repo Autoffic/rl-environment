@@ -16,7 +16,7 @@ else:
 import sumo
 import sumo.tools.sumolib as sumolib
 from sumo.tools import traci
-import gym
+import gymnasium as gym
 
 class TrafficIntersectionEnvSingleLaneGUI(gym.Env):
 
