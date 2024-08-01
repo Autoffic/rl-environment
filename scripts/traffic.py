@@ -49,7 +49,6 @@ import sumo
 import sumo.tools.sumolib as sumolib
 from sumo.tools import traci
 
-import gym
 from stable_baselines3 import PPO
 
 import sys
@@ -79,17 +78,17 @@ from custom_gym.envs.custom_env_dir.generateRouteFile import generate_routefile
 
 # constants
 TRAFFIC_INTERSECTION_TYPE = "triple"
-TOTAL_TIMESTEPS = 500000  # This is the sumo timestep which is somewhat independent of steps taken by model in simulation
+TOTAL_TIMESTEPS = 100000  # This is the sumo timestep which is somewhat independent of steps taken by model in simulation
 # rather this decides the number of steps in the simulation
 GENERATE_CUSTOM_ROUTE = False
 LOG_TO_FILE = True  # generating log of lane vehicle stats
 CONVERT_LOG_TO_CSV = True  # converting the generated log output to csv
 RL_ON = True  # for turning rl on or off
 BOTH_OUTPUTS = (
-    False  # for running both rl and no rl mode and generate ouput on same data
+    True  # for running both rl and no rl mode and generate ouput on same data
 )
 LOG_WAITING_TIME = True  # for logging waiting time
-LOG_PERCENTAGE_VEHICLE_PASSING = False  # for logging percentage vehicle passing
+LOG_PERCENTAGE_VEHICLE_PASSING = True  # for logging percentage vehicle passing
 
 YELLOW_TIME = 10
 MIN_GREEN_TIME = 30
@@ -126,12 +125,8 @@ models_path = Path(str(ROOT) + "/models").resolve()
 
 # Here, formatting is done as to create error if wrong model is selected
 # as, there won't be same model trained at exact same time and upto same timesteps
-model_path = Path(
-    str(models_path)
-    + "/2023-10-31 10_18_11.112768-TrafficIntersection-{}LaneGUI-ppo-last_timestep.zip".format(
-        TRAFFIC_INTERSECTION_TYPE.capitalize()
-    )
-).resolve()
+model_path = models_path.joinpath("2024-07-31 17_43_11.889176-TrafficIntersection-{}LaneGUI-ppo".format(TRAFFIC_INTERSECTION_TYPE.capitalize()), "best_model.zip").resolve()
+
 model = PPO.load(str(model_path))
 
 
@@ -139,13 +134,14 @@ def run(use_rl: bool = False, connection_label=None, unique_identifier: str | No
     global LOG_TO_FILE, LOG_WAITING_TIME
 
     time_spent_on_inference = 0
-
+    step_listener = None
     # is libsumo isn't used
     if "LIBSUMO_AS_TRACI" not in os.environ or os.environ["LIBSUMO_AS_TRACI"] != "1":
         # choosing the given connection for traffic light switching
         if connection_label is not None:
             traci.switch(connection_label)
 
+    undefined_intersection = False
     if LOG_TO_FILE and LOG_WAITING_TIME:
         output_file = (
             Path(
@@ -158,6 +154,42 @@ def run(use_rl: bool = False, connection_label=None, unique_identifier: str | No
         print(f"Writing output to file {output_file}")
         with open(output_file, "w") as csv_file:
             csv_file.write("current_time,waiting_time\n")
+
+        if TRAFFIC_INTERSECTION_TYPE == "single":
+            lanes_to_observe = ["-E8_0", "-E9_0", "-E10_0", "E7_0"]
+            junction_with_lights = "J9"
+        elif TRAFFIC_INTERSECTION_TYPE == "double":
+            lanes_to_observe = [
+                    "E9_0, E9_1, E8_0, E8_1, -E10_0, -E10_1, -E11_0, -E11_1"
+                ]
+            junction_with_lights = "J11"
+        elif TRAFFIC_INTERSECTION_TYPE == "triple":
+                junction_with_lights = "J1"
+
+                lanes_to_observe = [
+                    "E0_0",
+                    "E0_1",
+                    "E0_2",
+                    "-E1_0",
+                    "-E1_1",
+                    "-E1_2",
+                    "-E2_0",
+                    "-E2_1",
+                    "-E2_2",
+                    "-E3_0",
+                    "-E3_1",
+                    "-E3_2",
+                ]
+        else:
+            undefined_intersection = True
+            print(f"The given intersection {TRAFFIC_INTERSECTION_TYPE} is undefined.")
+
+    metric_env: None | MetricEnv = None
+    step_listener: None | StepListener  = None
+
+    if not undefined_intersection:
+        metric_env = MetricEnv(lanes_to_observe=lanes_to_observe, conn=traci)
+        step_listener = StepListener(metric_env)
 
     step = 0
     if not use_rl:  # if rl is turned off the continue without intervention
@@ -176,24 +208,16 @@ def run(use_rl: bool = False, connection_label=None, unique_identifier: str | No
             )
         while step < TOTAL_TIMESTEPS:
             if step == 0:  # setting the initial configuration
-                if TRAFFIC_INTERSECTION_TYPE == "single":
-                    traci.trafficlight.setPhase("J9", 4)
-                elif TRAFFIC_INTERSECTION_TYPE == "double":
-                    traci.trafficlight.setPhase("J11", 4)
-                elif TRAFFIC_INTERSECTION_TYPE == "triple":
-                    traci.trafficlight.setPhase("J1", 4)
+                if not undefined_intersection:
+                    traci.trafficlight.setPhase(junction_with_lights, 4)
+                    traci.addStepListener(step_listener)
 
                 traci.simulationStep()
                 step = traci.simulation.getTime()
                 continue
 
-            undefined_intersection = False
-
-            lanes_to_observe: [str] = []
 
             if TRAFFIC_INTERSECTION_TYPE == "single":
-
-                lanes_to_observe = ["-E8_0", "-E9_0", "-E10_0", "E7_0"]
 
                 lanes_observation = numpy.zeros(lanes_to_observe.__len__())
                 for i, lane in enumerate(lanes_to_observe):
@@ -205,10 +229,6 @@ def run(use_rl: bool = False, connection_label=None, unique_identifier: str | No
 
             elif TRAFFIC_INTERSECTION_TYPE == "double":
 
-                lanes_to_observe = [
-                    "E9_0, E9_1, E8_0, E8_1, -E10_0, -E10_1, -E11_0, -E11_1"
-                ]
-
                 lanes_observation = numpy.zeros(lanes_to_observe.__len__())
                 for i, lane in enumerate(lanes_to_observe):
                     lanes_observation[i] = traci.lane.getLastStepVehicleNumber(lane)
@@ -219,21 +239,6 @@ def run(use_rl: bool = False, connection_label=None, unique_identifier: str | No
 
             elif TRAFFIC_INTERSECTION_TYPE == "triple":
 
-                lanes_to_observe = [
-                    "E0_0",
-                    "E0_1",
-                    "E0_2",
-                    "-E1_0",
-                    "-E1_1",
-                    "-E1_2",
-                    "-E2_0",
-                    "-E2_1",
-                    "-E2_2",
-                    "-E3_0",
-                    "-E3_1",
-                    "-E3_2",
-                ]
-
                 lanes_observation = numpy.zeros(lanes_to_observe.__len__())
                 for i, lane in enumerate(lanes_to_observe):
                     lanes_observation[i] = traci.lane.getLastStepVehicleNumber(lane)
@@ -242,17 +247,17 @@ def run(use_rl: bool = False, connection_label=None, unique_identifier: str | No
                 while delta_yellow_time < YELLOW_TIME:
                     traci.simulationStep()
                     delta_yellow_time += 1
-            else:
-                undefined_intersection = True
-                print(f"The given insercetion {TRAFFIC_INTERSECTION_TYPE} is not defined.")
 
             # finding out waiting time
-            if LOG_TO_FILE and LOG_WAITING_TIME and not undefined_intersection:
-                waiting_time = calculate_waiting_time(lanes_to_observe, traci)
+            if LOG_TO_FILE and LOG_WAITING_TIME and not undefined_intersection and metric_env is not None:
+                waiting_time = metric_env.calculate_waiting_time()
                 current_time = traci.simulation.getTime()
                 
                 with open(output_file, "a") as csv_file:
                     csv_file.write(f"{current_time},{waiting_time}\n")
+            
+            # clearing the vehicle ids to keep proper track of vehicle ids between steps for waiting time calculation
+            step_listener.clear_last_step_vehicle_ids()
 
             # Turning green light for the predefined period of time
             delta_green_time = 0
@@ -276,32 +281,23 @@ def run(use_rl: bool = False, connection_label=None, unique_identifier: str | No
                 .__str__(),
             )
         print("\n Reinforcement Learning is On. \n")
+
         while step < TOTAL_TIMESTEPS:
             if step == 0:  # setting the initial configuration
-                if TRAFFIC_INTERSECTION_TYPE == "single":
-                    traci.trafficlight.setPhase("J9", 4)
-                elif TRAFFIC_INTERSECTION_TYPE == "double":
-                    traci.trafficlight.setPhase("J11", 4)
-                elif TRAFFIC_INTERSECTION_TYPE == "triple":
-                    traci.trafficlight.setPhase("J1", 4)
+
+                if not undefined_intersection:
+                    traci.trafficlight.setPhase(junction_with_lights, 4)
+                    traci.addStepListener(step_listener)
 
                 traci.simulationStep()
                 step = traci.simulation.getTime()
                 continue
             current_state = None
             next_configuration = current_state  # Doing this so that next configuration is defined if none of the conditions is met
-            junction_with_lights = None
-
-            undefined_intersection = False
-
-            lanes_to_observe: [str] = []
 
             if TRAFFIC_INTERSECTION_TYPE == "single":
-                junction_with_lights = "J9"
 
                 current_state = traci.trafficlight.getPhase(junction_with_lights)
-
-                lanes_to_observe = ["-E8_0", "-E9_0", "-E10_0", "E7_0"]
 
                 lanes_observation = numpy.zeros(lanes_to_observe.__len__())
                 for i, lane in enumerate(lanes_to_observe):
@@ -331,13 +327,8 @@ def run(use_rl: bool = False, connection_label=None, unique_identifier: str | No
                         delta_yellow_time += 1
 
             elif TRAFFIC_INTERSECTION_TYPE == "double":
-                junction_with_lights = "J11"
 
                 current_state = traci.trafficlight.getPhase(junction_with_lights)
-
-                lanes_to_observe = [
-                    "E9_0, E9_1, E8_0, E8_1, -E10_0, -E10_1, -E11_0, -E11_1"
-                ]
 
                 lanes_observation = numpy.zeros(lanes_to_observe.__len__())
                 for i, lane in enumerate(lanes_to_observe):
@@ -363,24 +354,8 @@ def run(use_rl: bool = False, connection_label=None, unique_identifier: str | No
                         delta_yellow_time += 1
 
             elif TRAFFIC_INTERSECTION_TYPE == "triple":
-                junction_with_lights = "J1"
 
                 current_state = traci.trafficlight.getPhase(junction_with_lights)
-
-                lanes_to_observe = [
-                    "E0_0",
-                    "E0_1",
-                    "E0_2",
-                    "-E1_0",
-                    "-E1_1",
-                    "-E1_2",
-                    "-E2_0",
-                    "-E2_1",
-                    "-E2_2",
-                    "-E3_0",
-                    "-E3_1",
-                    "-E3_2",
-                ]
 
                 lanes_observation = numpy.zeros(lanes_to_observe.__len__())
                 for i, lane in enumerate(lanes_to_observe):
@@ -409,12 +384,15 @@ def run(use_rl: bool = False, connection_label=None, unique_identifier: str | No
                 print(f"The given intersection {TRAFFIC_INTERSECTION_TYPE} is not defined.")
 
             # finding out waiting time
-            if LOG_TO_FILE and LOG_WAITING_TIME and not undefined_intersection:
-                waiting_time = calculate_waiting_time(lanes_to_observe, traci)
+            if LOG_TO_FILE and LOG_WAITING_TIME and not undefined_intersection and metric_env is not None:
+                waiting_time = metric_env.calculate_waiting_time()
                 current_time = traci.simulation.getTime()
-                
+
                 with open(output_file, "a") as csv_file:
                     csv_file.write(f"{current_time},{waiting_time}\n")
+
+            # clearing the vehicle ids to keep proper track of vehicle ids between steps for waiting time calculation
+            step_listener.clear_last_step_vehicle_ids()
 
             # Turning green light for the predefined period of time
             delta_green_time = 0
@@ -434,13 +412,16 @@ def run(use_rl: bool = False, connection_label=None, unique_identifier: str | No
 def start_logging(
     use_rl: bool,
     log_to_file: bool,
-    convert_to_csv: bool = False,
+    convert_file_to_csv: bool = False,
     nogui: bool = True,
     unique_identifier: str | int = time.time(),
+    log_percentage_vehicle_passing: bool = LOG_PERCENTAGE_VEHICLE_PASSING,
+    total_timesteps: int = TOTAL_TIMESTEPS,
+    traffic_intersection_type: str = TRAFFIC_INTERSECTION_TYPE,
 ) -> Path | None:
     global net_file, route_file, sumocfg_file, additional_file_rl, additional_file_no_rl, logging_output_folder
 
-    if log_to_file and LOG_PERCENTAGE_VEHICLE_PASSING:
+    if log_to_file and log_percentage_vehicle_passing:
         output_file = (
             Path(
                 str(logging_output_folder)
@@ -460,16 +441,16 @@ def start_logging(
     # Generating custom route file
     # the generated route file is random but follows same kind of vehicular flow during training
     if GENERATE_CUSTOM_ROUTE:
-        route_file = generate_routefile(TRAFFIC_INTERSECTION_TYPE, number_of_time_steps=TOTAL_TIMESTEPS)
+        route_file = generate_routefile(traffic_intersection_type, number_of_time_steps=total_timesteps)
 
     # Generating a additional file for logging
-    if log_to_file and LOG_PERCENTAGE_VEHICLE_PASSING:
+    if log_to_file and log_percentage_vehicle_passing:
         if not os.path.exists(logging_output_folder):
             os.mkdir(logging_output_folder)
 
         setupLaneCounting(
             begin=0,
-            end=TOTAL_TIMESTEPS,
+            end=total_timesteps,
             trafficLightSwitchingTime=MIN_GREEN_TIME,
             yellowLightTime=YELLOW_TIME,
             outputFile=output_file,
@@ -484,7 +465,7 @@ def start_logging(
 
     # this is the normal way of using traci. sumo is started as a
     # subprocess and then the python script connects and runs
-    if log_to_file and LOG_PERCENTAGE_VEHICLE_PASSING:
+    if log_to_file and log_percentage_vehicle_passing:
         traci.start(
             [
                 sumoBinary,
@@ -519,10 +500,10 @@ def start_logging(
         traci.switch(connection_label)
     traci.close()
 
-    if LOG_PERCENTAGE_VEHICLE_PASSING and convert_to_csv:
+    if log_percentage_vehicle_passing and convert_file_to_csv:
         convert_to_csv(output_file)
 
-    return output_file if (log_to_file and LOG_PERCENTAGE_VEHICLE_PASSING) else None
+    return output_file if (log_to_file and log_percentage_vehicle_passing) else None
 
 
 def convert_to_csv(filename: str):
@@ -552,7 +533,7 @@ def get_options():
                     default=False, help="Turn on waiting time logging.")
     optParser.add_option("--log-percentage-vehicle-passing", action="store_true",
                     default=False, help="Turn on vehicle passing logging.")
-    optParser.add_option("--convert-to-csv", action="store_true",
+    optParser.add_option("--convert-file-to-csv", action="store_true",
                     default=False, help="convert the created log xml file to csv")
     optParser.add_option("--turn-off-rl", action="store_true",
                     default=False, help="turn off the reinforcement learning inference and continue using only sumo")
@@ -567,7 +548,7 @@ def start(
     logging_off=False,
     log_waiting_time=False,
     log_percentage_vehicle_passing=False,
-    convert_to_csv=True,
+    convert_file_to_csv=True,
     turn_off_rl=False,
     generate_both_outputs=True,
 ):
@@ -591,7 +572,7 @@ def start(
         LOG_PERCENTAGE_VEHICLE_PASSING = log_percentage_vehicle_passing
         LOG_WAITING_TIME = log_waiting_time
 
-    if convert_to_csv:
+    if convert_file_to_csv:
         CONVERT_LOG_TO_CSV = True
 
     if turn_off_rl:
@@ -607,7 +588,10 @@ def start(
         "log_to_file": LOG_TO_FILE,
         "nogui": nogui,
         "unique_identifier": common_time,
-        "convert_to_csv": True,
+        "convert_file_to_csv": convert_file_to_csv,
+        "log_percentage_vehicle_passing": LOG_PERCENTAGE_VEHICLE_PASSING,
+        "total_timesteps": TOTAL_TIMESTEPS,
+        "traffic_intersection_type": TRAFFIC_INTERSECTION_TYPE
     }
 
     rl_kwargs = no_rl_kwargs.copy()
@@ -649,38 +633,50 @@ def start(
               print(f"Generation of CSV failed!")
 
 
-def calculate_waiting_time(lanes_to_observe: [str], conn: traci) -> float:
-    """
-    # Parameters
-    lanes_to_observe: list of lane identifiers (str)
-    conn: the traci connection
-    # Returns
-    The total waiting time of a lane as flaot.
-    """
-    total_waiting_time = 0
-    for lane in lanes_to_observe:
-        total_waiting_time += calculate_waiting_time_of_a_lane(lane, conn)
-    return total_waiting_time
-
-
-def calculate_waiting_time_of_a_lane(lane: str, conn: traci) -> float:
-    """
-    # Parameters
-    lane: the lane for which waiting time is to be calculated
-    conn: the traci connection
-    # Returns
-    The waiting time as float
-    """
-    last_step_vehicles_ids = conn.lane.getLastStepVehicleIDs(lane)
-    waiting_time: float = 0.0
-
-    for vehicle in last_step_vehicles_ids:
-        waiting_time += conn.vehicle.getAccumulatedWaitingTime(vehicle)
-    return waiting_time
-
-
 if __name__ == "__main__":
     options = get_options()
     print(options)
 
     start(**vars(options))
+
+
+class MetricEnv():
+
+    def __init__(self, lanes_to_observe, conn = traci):
+        self.total_vehicle_count = 0
+        self.vehicle_ids = set([])
+        self.vehicle_ids_between_steps = set([])
+        self.lanes_to_observe = lanes_to_observe
+        self.conn = conn
+    
+    def calculate_waiting_time(self) -> float:
+        waiting_time = 0
+        for vehicle in self.vehicle_ids_between_steps:
+            waiting_time += self.conn.vehicle.getAccumulatedWaitingTime(vehicle)
+        return waiting_time
+    
+
+class StepListener(traci.StepListener):
+
+    def __init__(self, env: MetricEnv) -> None:
+        super().__init__()
+        self.env = env
+
+    def step(self, env=None):
+
+        last_step_vehicle_ids = set([])
+
+        for lane in self.env.lanes_to_observe:
+            last_step_vehicle_ids.update(self.env.conn.lane.getLastStepVehicleIDs(lane))
+
+        self.env.vehicle_ids.update(last_step_vehicle_ids)
+        self.env.total_vehicle_count = len(self.env.vehicle_ids)
+
+        self.env.vehicle_ids_between_steps.update(last_step_vehicle_ids)
+        return True
+    
+    def clear_last_step_vehicle_ids(self):
+        self.env.vehicle_ids_between_steps = set([])
+        
+    def cleanUp(self):
+        return super().cleanUp()
