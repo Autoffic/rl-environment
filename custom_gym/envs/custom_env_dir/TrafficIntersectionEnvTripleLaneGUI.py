@@ -116,7 +116,6 @@ class TrafficIntersectionEnvTripleLaneGUI(gym.Env):
             traci.switch(self.connection_label)
 
         self.vehicle_count_up_to_last_step = self.total_vehicle_count
-        self.step_listener.clear_last_step_vehicle_ids()
 
         if not self.connection_present:
             self.reset()
@@ -174,14 +173,22 @@ class TrafficIntersectionEnvTripleLaneGUI(gym.Env):
         self.state = lanes_observation
 
         self.last_step_vehicle_count = len(self.vehicle_ids_between_steps)
+        self.current_waiting_time = self.calculate_waiting_time()
+
         reward = self.calculate_reward()
 
-        info["waiting_time"] = self.last_waiting_time
+        # only clear vehicle ids upto last step after successfully calculating the rewards
+        self.step_listener.clear_last_step_vehicle_ids()
+
+        info["average_waiting_time"] = self.current_waiting_time / max(1, self.last_step_vehicle_count)
+        info["waiting_time"] = self.current_waiting_time
         info["last_step_vehicle_count"] = self.last_step_vehicle_count
         info["vehicle_entered"] = self.total_vehicle_count - self.vehicle_count_up_to_last_step
 
         terminated = done
         truncated = False
+
+        self.last_waiting_time = self.current_waiting_time # for calculating difference
 
         return self.state, reward, terminated, truncated, info
 
@@ -238,6 +245,7 @@ class TrafficIntersectionEnvTripleLaneGUI(gym.Env):
 
         # for reward calculation
         self.last_waiting_time = 0
+        self.current_waiting_time = 0
         self.total_vehicle_count = 1  # to avoid division by zero
         self.vehicle_ids = set([])
         self.vehicle_ids_between_steps = set([])
@@ -254,25 +262,17 @@ class TrafficIntersectionEnvTripleLaneGUI(gym.Env):
         self.state = lanes_observation
 
         info = {}
-        info["waiting_time"] = self.last_waiting_time
+        info["average_waiting_time"] = self.current_waiting_time / max(1, self.last_step_vehicle_count)
+        info["waiting_time"] = self.current_waiting_time
         info["last_step_vehicle_count"] = self.last_step_vehicle_count
         info["vehicle_entered"] = self.total_vehicle_count - self.vehicle_count_up_to_last_step
 
         return (self.state, info)
 
     def calculate_waiting_time(self) -> float:
-        total_waiting_time = 0
-        for lane in self.lanes_to_observe:
-            total_waiting_time += self.calculate_waiting_time_of_a_lane(lane)
-        return total_waiting_time       
-
-    def calculate_waiting_time_of_a_lane(self, lane: str) -> float:
-        last_step_vehicles_ids = self.conn.lane.getLastStepVehicleIDs(lane)
-
         waiting_time = 0
-        for vehicle in last_step_vehicles_ids:
+        for vehicle in self.vehicle_ids_between_steps:
             waiting_time += self.conn.vehicle.getAccumulatedWaitingTime(vehicle)
-
         return waiting_time
     
 
@@ -285,13 +285,11 @@ class TrafficIntersectionEnvTripleLaneGUI(gym.Env):
         """
             Reward based on difference in cumulative waiting time which is normalized based on total vehicle count
         """
-        
-        total_waiting_time = self.calculate_waiting_time()
 
-        decrease_in_waiting_time = self.last_waiting_time - total_waiting_time
-        self.last_waiting_time = total_waiting_time
+        decrease_in_waiting_time = self.last_waiting_time - self.current_waiting_time
+        vehicle_count = max(1, self.last_step_vehicle_count)  # setting a minimum value, to avoid NaNs
 
-        return decrease_in_waiting_time
+        return decrease_in_waiting_time / vehicle_count
 
     def reward_on_average_waiting_time(self) -> float:
         """
@@ -299,18 +297,16 @@ class TrafficIntersectionEnvTripleLaneGUI(gym.Env):
         """
 
         vehicle_count = max(1, self.last_step_vehicle_count)  # setting a minimum value, to avoid NaNs
-        waiting_time = max(1, self.calculate_waiting_time())  # setting a minimum value, to avoid NaNs
-        self.last_waiting_time = waiting_time
-        reward = - waiting_time / vehicle_count
+        reward = - self.current_waiting_time / vehicle_count
 
         return reward
     
     def reward_on_average_emission(self) -> float:
-        return 0.0 if len(self.conn.vehicle.getIDList()) < 1 else -numpy.mean([self.conn.vehicle.getCO2Emission(veh) for veh in self.conn.vehicle.getIDList()])
+        return 0.0 if self.last_step_vehicle_count< 1 else -numpy.mean([self.conn.vehicle.getCO2Emission(veh) for veh in self.vehicle_ids_between_steps])
 
 
     def reward_on_average_speed(self) -> float:
-        return 0.0 if len(self.conn.vehicle.getIDList()) < 1 else numpy.mean([self.conn.vehicle.getSpeed(veh) for veh in self.conn.vehicle.getIDList()])
+        return 0.0 if self.last_step_vehicle_count< 1 else numpy.mean([self.conn.vehicle.getSpeed(veh) for veh in self.vehicle_ids_between_steps])
 
 
     def composite_reward(self) -> float:
