@@ -21,8 +21,9 @@ import signal
 
 # Training constants
 TRAFFIC_INTERSECTION_TYPE="triple"
-TOTAL_TIMESTEPS_FOR_SUMO=79000
-TOTAL_TIMESTEPS_FOR_MODEL=1000000 # call env.step() this many times
+TOTAL_TIMESTEPS_FOR_SUMO=79_000
+TOTAL_TIMESTEPS_FOR_MODEL=10_00_000 # call env.step() this many times
+EVAL_TIMESTEPS=1_000
 
 #times
 MIN_GREEN_TIME=30
@@ -119,10 +120,10 @@ def train():
     }
 
     # environment for training
-    env = get_env(env_name=env_name, **env_kwargs, use_gui=use_gui, n_envs=5, generate_new_route_files=True)
+    env = get_env(env_name=env_name, **env_kwargs, use_gui=use_gui, n_envs=5, generate_new_route_files=True, total_timesteps=int(TOTAL_TIMESTEPS_FOR_SUMO))
 
     # environment for evaluation
-    eval_env = get_env(env_name=env_name, **env_kwargs, use_gui=use_gui, n_envs=2, total_timesteps=128)
+    eval_env = get_env(env_name=env_name, **env_kwargs, use_gui=use_gui, n_envs=2, total_timesteps=int(EVAL_TIMESTEPS))
     
     # stable_baselines3.common.env_checker.check_env(env, warn=True, skip_render_check=True)
 
