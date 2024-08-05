@@ -33,7 +33,7 @@ NUMBER_OF_LANES_TO_OBSERVE = int(TOTAL_NUMBER_OF_LANES / 2)
 class TrafficIntersectionEnvTripleLaneGUI(gym.Env):
     connection_index = 0
 
-    def __init__(self, use_gui: bool = True, total_timesteps: int = 5000, delta_time: int=30, min_green: int=15, max_green: int=120, yellow_time: int=7, sumocfg_file: str = None, network_file: str = None, route_file: str = None, generate_new_route_files: bool = True) -> None:
+    def __init__(self, use_gui: bool = True, total_timesteps: int = 5000, delta_time: int=30, min_green: int=15, max_green: int=120, yellow_time: int=7, sumocfg_file: str = None, network_file: str = None, route_file: str = None, generate_new_route_files: bool = True, reset_if_percentage_stopped: float = 0.8) -> None:
 
         SUMO_FILES = pathlib.Path(__file__).parents[0].joinpath("sumo-files")
         SMALL_MAP_TRIPLE_LANE = SUMO_FILES.joinpath(f"small-map-{TRAFFIC_INTERSECTION_TYPE}-lane")
@@ -81,6 +81,8 @@ class TrafficIntersectionEnvTripleLaneGUI(gym.Env):
         # the last step implies the model's last step not the last simulation step (in this case)
         self.last_step_vehicle_count: float = 1  # to avoid NaN
         self.vehicle_count_up_to_last_step: float = 0
+
+        self.reset_if_percentage_stopped = reset_if_percentage_stopped
 
         if use_gui:
             sumoBinary = sumolib.checkBinary('sumo-gui')
@@ -188,7 +190,13 @@ class TrafficIntersectionEnvTripleLaneGUI(gym.Env):
         terminated = done
         truncated = False
 
+        if self.calculate_stopped_percentage() > self.reset_if_percentage_stopped:
+            truncated = True
+
         self.last_waiting_time = self.current_waiting_time # for calculating difference
+
+        if terminated or truncated:
+            self.reset()
 
         return self.state, reward, terminated, truncated, info
 
@@ -222,6 +230,8 @@ class TrafficIntersectionEnvTripleLaneGUI(gym.Env):
                 # taking the return file path, as it might be already present and new one is generated
                 new_route_file = generate_routefile(intersection_type=TRAFFIC_INTERSECTION_TYPE, number_of_time_steps=self.total_timesteps)
                 self.route_file = new_route_file
+
+                # todo: keep track of the generated route file and delete it at the termination
 
             self.conn.close()
             self.connection_present = False
@@ -275,6 +285,20 @@ class TrafficIntersectionEnvTripleLaneGUI(gym.Env):
             waiting_time += self.conn.vehicle.getAccumulatedWaitingTime(vehicle)
         return waiting_time
     
+    def calculate_stopped_percentage(self) -> float:
+        """
+        Returns
+        -------- 
+        The percentage of currently stopped vehicles
+        """
+        total_vehicles = self.vehicle_count_up_to_last_step
+        stopped_count = 0
+        for vehicle in self.vehicle_ids_between_steps:
+            if self.conn.vehicle.getStopState(vehicle) == 1:
+                stopped_count += 1
+
+        return stopped_count / max(1, total_vehicles) # avoiding division by zero
+    
 
     def calculate_reward(self) -> float:
 
@@ -293,7 +317,7 @@ class TrafficIntersectionEnvTripleLaneGUI(gym.Env):
 
     def reward_on_average_waiting_time(self) -> float:
         """
-            reward based on inverse of waiting time * total vehicle count
+            reward based on waiting time per vehicle (negative i.e. less waiting time is good)
         """
 
         vehicle_count = max(1, self.last_step_vehicle_count)  # setting a minimum value, to avoid NaNs
@@ -312,6 +336,7 @@ class TrafficIntersectionEnvTripleLaneGUI(gym.Env):
     def composite_reward(self) -> float:
 
         reward = self.reward_on_decrease_in_waiting_time()
+        # + self.reward_on_average_waiting_time()
         + self.reward_on_average_emission()
         + self.reward_on_average_speed()
 
