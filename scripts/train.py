@@ -85,6 +85,7 @@ class TensorboardCallback(BaseCallback):
     def _on_step(self) -> bool:
         
         self.logger.record("training:avg_reward", np.average(self.locals["rewards"]))
+        self.logger.record("training:average_waiting_time", np.average([ info["average_waiting_time"] for info in self.locals["infos"]]))
         self.logger.record("training:waiting_time", np.average([ info["waiting_time"] for info in self.locals["infos"]]))
         self.logger.record("training:vehicle_count", np.average([ info["last_step_vehicle_count"] for info in self.locals["infos"]]))
         self.logger.record("training:vehicle_entered", np.average([ info["vehicle_entered"] for info in self.locals["infos"]]))
