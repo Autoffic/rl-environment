@@ -10,11 +10,14 @@
 
 - `cd ..`
 
+## Setup Environment
+`source ./setup.sh`
+
 ## Start training
-`python train.py`
+`python ./scripts/train.py`
 
 ## See the results
-`python traffic.py`
+`python ./scripts/traffic.py`
 
 ## For gpu support
 You need to uninstall pytorch cpu version if installed already and install the gpu version.
