@@ -29,6 +29,18 @@ EVAL_TIMESTEPS=1_000
 MIN_GREEN_TIME=30
 YELLOW_TIME=10
 
+# number of environments for training and evaluations
+N_TRAIN_ENVS = 8
+N_EVAL_ENVS = 2
+
+# Hyper-Parameters
+VERBOSE=1
+BATCH_SIZE=64
+N_STEPS=256
+N_EPOCHS=10
+ENT_COEFF=0.1
+GAMMA=0.8138
+
 
 def get_env(env_name = "TrafficIntersectionEnv{}LaneGUI-v1".format(TRAFFIC_INTERSECTION_TYPE.capitalize()), multi=True, use_gui=False, subprocess=True, n_envs=multiprocessing.cpu_count(), min_green=30, yellow_time=10, _seed=1, total_timesteps=TOTAL_TIMESTEPS_FOR_SUMO, generate_new_route_files: bool = True):
 
@@ -55,7 +67,7 @@ def get_env(env_name = "TrafficIntersectionEnv{}LaneGUI-v1".format(TRAFFIC_INTER
                     return env
                 return _init
 
-            n_envs = min(n_envs, multiprocessing.cpu_count())  # don't allocate more subprocesses than logical cores.
+            n_envs = min(n_envs, multiprocessing.cpu_count() - 1)  # don't allocate more subprocesses than logical cores.
             envs= [make_env(env_name, seed) for seed in range(n_envs)]
 
             envs = SubprocVecEnv(envs, start_method=start_method)
@@ -121,14 +133,14 @@ def train():
     }
 
     # environment for training
-    env = get_env(env_name=env_name, **env_kwargs, use_gui=use_gui, n_envs=5, generate_new_route_files=True, total_timesteps=int(TOTAL_TIMESTEPS_FOR_SUMO))
+    env = get_env(env_name=env_name, **env_kwargs, use_gui=use_gui, n_envs=N_TRAIN_ENVS, generate_new_route_files=True, total_timesteps=int(TOTAL_TIMESTEPS_FOR_SUMO))
 
     # environment for evaluation
-    eval_env = get_env(env_name=env_name, **env_kwargs, use_gui=use_gui, n_envs=2, total_timesteps=int(EVAL_TIMESTEPS))
+    eval_env = get_env(env_name=env_name, **env_kwargs, use_gui=use_gui, n_envs=N_EVAL_ENVS, total_timesteps=int(EVAL_TIMESTEPS))
     
     # stable_baselines3.common.env_checker.check_env(env, warn=True, skip_render_check=True)
 
-    model = PPO("MlpPolicy", env, device="auto", verbose=1, batch_size=64, n_steps=256, n_epochs=10, tensorboard_log=log_path, ent_coef=0.1, gamma=0.8138)
+    model = PPO("MlpPolicy", env, device="auto", verbose=VERBOSE, batch_size=BATCH_SIZE, n_steps=N_STEPS, n_epochs=N_EPOCHS, tensorboard_log=log_path, ent_coef=ENT_COEFF, gamma=GAMMA)
 
     # model = PPO.load(Path(str(models_path) + "/2022_08_26_20_31_22_136701_TrafficIntersection_{}LaneGUI_{}".format(TRAFFIC_INTERSECTION_TYPE.capitalize(), modelType), env=env).resolve().__str__())
     model.set_env(env)

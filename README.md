@@ -48,6 +48,9 @@ pip install -e .
 cd ..
 ```
 
+## Setup Environment
+`source ./setup.sh`
+
 ## Start training
 
 ```sh

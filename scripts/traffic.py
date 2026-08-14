@@ -125,7 +125,7 @@ models_path = Path(str(ROOT) + "/models").resolve()
 
 # Here, formatting is done as to create error if wrong model is selected
 # as, there won't be same model trained at exact same time and upto same timesteps
-model_path = models_path.joinpath("2024-07-31 17_43_11.889176-TrafficIntersection-{}LaneGUI-ppo".format(TRAFFIC_INTERSECTION_TYPE.capitalize()), "best_model.zip").resolve()
+model_path = models_path.joinpath("2024-08-05 21_20_54.921009-TrafficIntersection-{}LaneGUI-ppo".format(TRAFFIC_INTERSECTION_TYPE.capitalize()), "best_model.zip").resolve()
 
 model = PPO.load(str(model_path))
 
