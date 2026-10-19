@@ -19,7 +19,11 @@ import gymnasium as gym
 import numpy
 from typing import Any
 
-from .generateRouteFile import generate_routefile
+from .generateRouteFile import (
+    generate_routefile,
+    pick_profile,
+    curriculum_profile,
+)
 
 import pathlib
 
@@ -28,6 +32,12 @@ file_separator = os.path.sep
 POSSIBLE_TRAFFIC_LIGHT_CONFIGURATION = int(4)
 TOTAL_NUMBER_OF_LANES = int(24)
 NUMBER_OF_LANES_TO_OBSERVE = int(TOTAL_NUMBER_OF_LANES / 2)
+# lane fractions + total vehicles + current phase index (0..3) + elapsed green
+# time (seconds). Lane counts are normalized by the total so the distribution
+# shape (scale-invariant uniformity) is decoupled from the absolute load.
+# The elapsed-green feature is optional (see include_elapsed_green) so the
+# obs-14 vs obs-15 regression can be A/B tested.
+MAX_OBSERVATION_SIZE = NUMBER_OF_LANES_TO_OBSERVE + 3
 
 
 class TrafficIntersectionEnvTripleLaneGUI(gym.Env):
@@ -46,6 +56,21 @@ class TrafficIntersectionEnvTripleLaneGUI(gym.Env):
         route_file: str = None,
         generate_new_route_files: bool = True,
         reset_if_percentage_stopped: float = 0.8,
+        forced_switch_penalty: float = 5.0,
+        switch_penalty: float = 15.0,
+        anti_starvation_threshold: float = 60.0,
+        anti_starvation_penalty: float = 0.25,
+        early_truncation_penalty: float = 50.0,
+        passing_reward_weight: float = 1.0,
+        waiting_time_reward_weight: float = 0.8,
+        reward_scale: float = 100.0,
+        reward_clip: float = 200.0,
+        queue_pressure_penalty: float = 0.2,
+        seed: int | None = None,
+        mixed_regimes: bool = True,
+        curriculum: bool = False,
+        curriculum_progress: float = 0.0,
+        include_elapsed_green: bool = True,
     ) -> None:
 
         SUMO_FILES = pathlib.Path(__file__).parents[0].joinpath("sumo-files")
@@ -72,13 +97,17 @@ class TrafficIntersectionEnvTripleLaneGUI(gym.Env):
         self.route_file = route_file
 
         self.action_space = gym.spaces.Discrete(POSSIBLE_TRAFFIC_LIGHT_CONFIGURATION)
+        self.include_elapsed_green = include_elapsed_green
+        self.observation_size = NUMBER_OF_LANES_TO_OBSERVE + (
+            3 if include_elapsed_green else 2
+        )
         self.observation_space = gym.spaces.Box(
             low=0,
             high=1000,
-            shape=(int(NUMBER_OF_LANES_TO_OBSERVE),),
+            shape=(int(self.observation_size),),
             dtype=numpy.float64,
         )
-        self.state = numpy.zeros(int(NUMBER_OF_LANES_TO_OBSERVE))
+        self.state = numpy.zeros(int(self.observation_size))
         self.render_mode = None
 
         self.total_timesteps = total_timesteps
@@ -86,6 +115,16 @@ class TrafficIntersectionEnvTripleLaneGUI(gym.Env):
         self.min_green = min_green
         self.max_green = max_green
         self.yellow_time = yellow_time
+        self.forced_switch_penalty = forced_switch_penalty
+        self.switch_penalty = switch_penalty
+        self.anti_starvation_threshold = anti_starvation_threshold
+        self.anti_starvation_penalty = anti_starvation_penalty
+        self.early_truncation_penalty = early_truncation_penalty
+        self.passing_reward_weight = passing_reward_weight
+        self.waiting_time_reward_weight = waiting_time_reward_weight
+        self.reward_scale = reward_scale
+        self.reward_clip = reward_clip if reward_clip is not None and reward_clip > 0 else float("inf")
+        self.queue_pressure_penalty = queue_pressure_penalty
 
         # The lanes are in order as defined in the network file, changing the order tampers with the observation
         # The order is from west, north, east and south
@@ -112,7 +151,26 @@ class TrafficIntersectionEnvTripleLaneGUI(gym.Env):
         self.last_step_vehicle_count: float = 1  # to avoid NaN
         self.vehicle_count_up_to_last_step: float = 0
 
+        # seconds the current green phase has been active (for the observation)
+        self.elapsed_green: float = 0
+
+        # longest green duration held for the current episode (across all
+        # phases and per phase) - tracks whether the model retains a phase
+        self.max_green_duration: float = 0
+        self.max_green_duration_per_phase: list[float] = [
+            0.0
+        ] * POSSIBLE_TRAFFIC_LIGHT_CONFIGURATION
+
+        self.mixed_regimes = mixed_regimes
+        self.curriculum = curriculum
+        self.curriculum_progress = curriculum_progress
+
         self.reset_if_percentage_stopped = reset_if_percentage_stopped
+
+        # reproducibility: seed controls route-file generation + SUMO RNG.
+        # Each reset advances the seed so episodes vary, but the sequence is reproducible.
+        self._seed = seed
+        self._reset_count = 0
 
         if use_gui:
             sumoBinary = sumolib.checkBinary("sumo-gui")
@@ -126,6 +184,7 @@ class TrafficIntersectionEnvTripleLaneGUI(gym.Env):
         self.total_vehicle_count = 1  # to avoid division by zero
         self.vehicle_ids = set([])
         self.vehicle_ids_between_steps = set([])
+        self.current_boundary_ids = set([])
 
         self.step_listener = StepListener(self)
         self.connection_label = f"conn_{self.connection_index}"
@@ -144,6 +203,30 @@ class TrafficIntersectionEnvTripleLaneGUI(gym.Env):
                 self.conn = None
                 self.connection_present = False
 
+    def _build_observation(self, junction_with_lights: str) -> numpy.ndarray:
+        """Build the normalized observation.
+
+        Layout: per-lane fraction of the total vehicles on the observed lanes
+        (scale-invariant shape) + total vehicle count (raw load) + current
+        green phase index (0..3) + optionally elapsed green time (seconds).
+        """
+        lane_counts = [
+            self.conn.lane.getLastStepVehicleNumber(lane)
+            for lane in self.lanes_to_observe
+        ]
+        total = max(sum(lane_counts), 1)
+
+        lanes_observation = numpy.zeros(int(self.observation_size))
+        for i, count in enumerate(lane_counts):
+            lanes_observation[i] = count / total
+        lanes_observation[NUMBER_OF_LANES_TO_OBSERVE] = total
+        lanes_observation[NUMBER_OF_LANES_TO_OBSERVE + 1] = (
+            self.conn.trafficlight.getPhase(junction_with_lights) // 2
+        )
+        if self.include_elapsed_green:
+            lanes_observation[NUMBER_OF_LANES_TO_OBSERVE + 2] = self.elapsed_green
+        return lanes_observation
+
     def step(self, action):
         if not self.libsumo_as_traci:
             traci.switch(self.connection_label)
@@ -159,10 +242,22 @@ class TrafficIntersectionEnvTripleLaneGUI(gym.Env):
         junction_with_lights = "J1"
 
         current_state = self.conn.trafficlight.getPhase(junction_with_lights)
+        current_phase_index = current_state // 2  # green phases 0, 2, 4, 6 -> 0..3
 
-        turn_yellow = True
+        forced_switch = False
+        info["forced_switch"] = False
 
         # if it's the same phase, then don't turn on yellow light
+        if (
+            float(action) == current_state / 2
+        ):  # dividing by 2 as green phases is 0, 2, 4, 6
+            # holding the same phase past max_green is forbidden: force a switch
+            if self.elapsed_green + self.min_green > self.max_green:
+                action = (current_phase_index + 1) % POSSIBLE_TRAFFIC_LIGHT_CONFIGURATION
+                forced_switch = True
+                info["forced_switch"] = True
+
+        turn_yellow = True
         if (
             float(action) == current_state / 2
         ):  # dividing by 2 as green phases is 0, 2, 4, 6
@@ -199,20 +294,57 @@ class TrafficIntersectionEnvTripleLaneGUI(gym.Env):
             self.conn.simulationStep()
             delta_green_time += 1
 
+        # track how long the current green phase has been active
+        if turn_yellow:
+            # the phase being left was green for `elapsed_green` seconds
+            self.max_green_duration = max(self.max_green_duration, self.elapsed_green)
+            self.max_green_duration_per_phase[current_phase_index] = max(
+                self.max_green_duration_per_phase[current_phase_index],
+                self.elapsed_green,
+            )
+            self.elapsed_green = self.min_green  # switched -> new green just started
+        else:
+            self.elapsed_green += self.min_green  # held -> green continues
+
         current_simulation_time = self.getSimulationTime()
         if current_simulation_time > self.total_timesteps:
             truncated = True
 
-        lanes_observation = numpy.zeros(int(NUMBER_OF_LANES_TO_OBSERVE))
-        for i, lane in enumerate(self.lanes_to_observe):
-            lanes_observation[i] = self.conn.lane.getLastStepVehicleNumber(lane)
-
-        self.state = lanes_observation
+        self.state = self._build_observation(junction_with_lights)
 
         self.last_step_vehicle_count = len(self.vehicle_ids_between_steps)
         self.current_waiting_time = self.calculate_waiting_time()
 
+        # vehicles still on the approach lanes at the end of this action;
+        # those observed earlier but not here anymore have crossed the intersection
+        boundary_ids = set([])
+        for lane in self.lanes_to_observe:
+            boundary_ids.update(self.conn.lane.getLastStepVehicleIDs(lane))
+        self.current_boundary_ids = boundary_ids
+
         reward = self.calculate_reward()
+        if forced_switch:
+            reward -= self.forced_switch_penalty
+        if turn_yellow:
+            reward -= self.switch_penalty
+        waiting_times = self.calculate_waiting_times()
+        max_waiting = max(waiting_times) if waiting_times else 0.0
+        if max_waiting > self.anti_starvation_threshold:
+            reward -= self.anti_starvation_penalty * (
+                max_waiting - self.anti_starvation_threshold
+            )
+        # S2: smooth congestion pressure from the *fraction* of stopped vehicles.
+        # Normalizing by the present vehicle count keeps the term density-invariant
+        # (bounded in [0, 1]) so it never dwarfs the throughput signal at high
+        # demand, and the >80% stopped reset handles genuine gridlock.
+        stopped_fraction = self.calculate_stopped_count() / max(
+            1, self.last_step_vehicle_count
+        )
+        reward -= self.queue_pressure_penalty * stopped_fraction
+
+        # hard bound: stops any single action (e.g. an extreme starvation wait)
+        # from producing a ±1000s reward that destabilizes advantage estimation
+        reward = max(-self.reward_clip, min(self.reward_clip, reward))
 
         info["average_waiting_time"] = self.current_waiting_time / max(
             1, self.last_step_vehicle_count
@@ -222,9 +354,17 @@ class TrafficIntersectionEnvTripleLaneGUI(gym.Env):
         info["vehicle_entered"] = (
             self.total_vehicle_count - self.vehicle_count_up_to_last_step
         )
+        info["max_grn_duration"] = self.max_green_duration
+        info["max_grn_phase_durn"] = self.max_green_duration_per_phase
 
+        # gridlock / excessive stopping ends the episode early: teach the agent
+        # to avoid it with a strong one-off penalty (time-limit truncation is fine)
         if self.calculate_stopped_percentage() > self.reset_if_percentage_stopped:
             truncated = True
+            reward -= self.early_truncation_penalty
+            info["early_truncation"] = True
+        else:
+            info["early_truncation"] = False
 
         self.last_waiting_time = self.current_waiting_time  # for calculating difference
 
@@ -237,6 +377,16 @@ class TrafficIntersectionEnvTripleLaneGUI(gym.Env):
         return self.conn.simulation.getTime()
 
     def reset(self, seed: int | None = None, options: dict[str, Any] | None = None):
+
+        # each reset advances the seed -> episodes vary, but the sequence is reproducible
+        route_seed = None
+        if self._seed is not None:
+            route_seed = self._seed + self._reset_count
+            self._reset_count += 1
+
+        # reset per-episode green-duration statistics
+        self.max_green_duration = 0.0
+        self.max_green_duration_per_phase = [0.0] * POSSIBLE_TRAFFIC_LIGHT_CONFIGURATION
 
         if not self.libsumo_as_traci and self.connection_present:
             traci.switch(self.connection_label)
@@ -266,10 +416,26 @@ class TrafficIntersectionEnvTripleLaneGUI(gym.Env):
                             print(f"Couldn't remove file {self.route_file}")
 
                 # taking the return file path, as it might be already present and new one is generated
-                new_route_file = generate_routefile(
-                    intersection_type=TRAFFIC_INTERSECTION_TYPE,
-                    number_of_time_steps=self.total_timesteps,
-                )
+                route_kwargs = {
+                    "intersection_type": TRAFFIC_INTERSECTION_TYPE,
+                    "number_of_time_steps": self.total_timesteps,
+                    "seed": route_seed,
+                }
+                if self.curriculum:
+                    # shared progress: a multiprocessing.Value (training) or a
+                    # plain float (eval/smoke); read .value when present
+                    progress = getattr(self.curriculum_progress, "value", None)
+                    if progress is None:
+                        progress = self.curriculum_progress
+                    weights, density = curriculum_profile(progress)
+                    route_kwargs["curriculum"] = True
+                    route_kwargs["base_weights"] = weights
+                    route_kwargs["base_density"] = density
+                elif self.mixed_regimes:
+                    route_kwargs["regime"], route_kwargs["density"] = pick_profile(
+                        route_seed
+                    )
+                new_route_file = generate_routefile(**route_kwargs)
                 self.route_file = new_route_file
 
                 # todo: keep track of the generated route file and delete it at the termination
@@ -290,6 +456,8 @@ class TrafficIntersectionEnvTripleLaneGUI(gym.Env):
             "--time-to-teleport",
             "-1",  # This makes it so that the vehicles won't teleport
         ]
+        if route_seed is not None:
+            sumo_cmd += ["--seed", str(route_seed)]
         traci.start(sumo_cmd, label=self.connection_label)
         if not self.libsumo_as_traci:
             self.conn = traci.getConnection(self.connection_label)
@@ -303,17 +471,17 @@ class TrafficIntersectionEnvTripleLaneGUI(gym.Env):
         self.total_vehicle_count = 1  # to avoid division by zero
         self.vehicle_ids = set([])
         self.vehicle_ids_between_steps = set([])
+        self.current_boundary_ids = set([])
 
         # for information about vehicles
         self.last_step_vehicle_count: float = 1  # to avoid NaN
         self.vehicle_count_up_to_last_step: float = 0
 
-        # setting the vehicle count on observing lane as observation
-        lanes_observation = numpy.zeros(int(NUMBER_OF_LANES_TO_OBSERVE))
-        for i, lane in enumerate(self.lanes_to_observe):
-            lanes_observation[i] = self.conn.lane.getLastStepVehicleNumber(lane)
+        # fresh simulation -> no green phase has run yet
+        self.elapsed_green: float = 0
 
-        self.state = lanes_observation
+        # setting the vehicle count on observing lane as observation (normalized)
+        self.state = self._build_observation("J1")
 
         info = {}
         info["average_waiting_time"] = self.current_waiting_time / max(
@@ -324,14 +492,33 @@ class TrafficIntersectionEnvTripleLaneGUI(gym.Env):
         info["vehicle_entered"] = (
             self.total_vehicle_count - self.vehicle_count_up_to_last_step
         )
+        info["max_grn_duration"] = self.max_green_duration
+        info["max_grn_phase_durn"] = self.max_green_duration_per_phase
+        info["forced_switch"] = False
+        info["early_truncation"] = False
 
         return (self.state, info)
 
+    def calculate_waiting_times(self) -> list[float]:
+        return [
+            self.conn.vehicle.getAccumulatedWaitingTime(vehicle)
+            for vehicle in self.vehicle_ids_between_steps
+        ]
+
     def calculate_waiting_time(self) -> float:
-        waiting_time = 0
-        for vehicle in self.vehicle_ids_between_steps:
-            waiting_time += self.conn.vehicle.getAccumulatedWaitingTime(vehicle)
-        return waiting_time
+        return sum(self.calculate_waiting_times())
+
+    def calculate_max_waiting_time(self) -> float:
+        waiting_times = self.calculate_waiting_times()
+        return max(waiting_times) if waiting_times else 0.0
+
+    def calculate_stopped_count(self) -> int:
+        """Number of currently stopped vehicles (speed < 0.1, ~0.36 km/h)."""
+        return sum(
+            1
+            for veh in self.vehicle_ids_between_steps
+            if self.conn.vehicle.getSpeed(veh) < 0.1
+        )
 
     def calculate_stopped_percentage(self) -> float:
         """
@@ -339,11 +526,9 @@ class TrafficIntersectionEnvTripleLaneGUI(gym.Env):
         --------
         The percentage of currently stopped vehicles
         """
-        present = self.vehicle_ids_between_steps
-        stopped_count = sum(
-            1 for veh in present if self.conn.vehicle.getSpeed(veh) < 0.1
-        )  # < 0.36km/hr
-        return stopped_count / max(1, len(present))
+        return self.calculate_stopped_count() / max(
+            1, len(self.vehicle_ids_between_steps)
+        )
 
     def calculate_reward(self) -> float:
 
@@ -373,6 +558,35 @@ class TrafficIntersectionEnvTripleLaneGUI(gym.Env):
 
         return reward
 
+    def reward_on_throughput_and_waiting(self) -> float:
+        """
+        Dense, smooth reward scaled to ~+/-100.
+
+        passing_percentage = fraction of vehicles observed on the approach lanes
+        during this action that cleared the intersection by its end (teleport is
+        disabled, so leaving the observed lanes means crossing J1 or finishing).
+
+        normalized_waiting = average waiting time of present vehicles divided by
+        the green duration (delta_time), so the whole term scales to roughly
+        `100 * passing_percentage - average_waiting`.
+        """
+
+        vehicle_count = max(
+            1, self.last_step_vehicle_count
+        )  # setting a minimum value, to avoid NaNs
+
+        crossed = len(self.vehicle_ids_between_steps) - len(
+            self.vehicle_ids_between_steps.intersection(self.current_boundary_ids)
+        )
+        passing_percentage = crossed / vehicle_count
+        average_waiting = self.current_waiting_time / vehicle_count
+        normalized_waiting = average_waiting / self.delta_time
+
+        return self.reward_scale * (
+            self.passing_reward_weight * passing_percentage
+            - self.waiting_time_reward_weight * normalized_waiting
+        )
+
     def reward_on_average_emission(self) -> float:
         return (
             0.0
@@ -400,7 +614,8 @@ class TrafficIntersectionEnvTripleLaneGUI(gym.Env):
     def composite_reward(self) -> float:
 
         reward = (
-            self.reward_on_decrease_in_waiting_time()
+            self.reward_on_throughput_and_waiting()
+            # + self.reward_on_decrease_in_waiting_time()
             # + self.reward_on_average_waiting_time()
             # + self.reward_on_average_emission()
             # + self.reward_on_average_speed()

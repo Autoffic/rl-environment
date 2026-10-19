@@ -6,6 +6,7 @@ from stable_baselines3.common.monitor import Monitor
 from stable_baselines3.common.vec_env.subproc_vec_env import SubprocVecEnv
 from stable_baselines3.common.vec_env.dummy_vec_env import DummyVecEnv
 from stable_baselines3.common.callbacks import BaseCallback
+from stable_baselines3.common.vec_env import VecNormalize
 import gymnasium as gym
 import multiprocessing
 from stable_baselines3.common.callbacks import EvalCallback, CallbackList
@@ -21,9 +22,23 @@ import signal
 
 # Training constants
 TRAFFIC_INTERSECTION_TYPE="triple"
-TOTAL_TIMESTEPS_FOR_SUMO=79_000
-TOTAL_TIMESTEPS_FOR_MODEL=10_00_000 # call env.step() this many times
+TOTAL_TIMESTEPS_FOR_SUMO=20_000  # per-episode SUMO horizon (shorter -> envs reset
+                                 # more often -> less difficulty mixing per rollout,
+                                 # and the critic tracks the curriculum faster)
+TOTAL_TIMESTEPS_FOR_MODEL=20_00_000 # call env.step() this many times
 EVAL_TIMESTEPS=1_000
+
+# Lunar-Lander-style curriculum: between-episode difficulty ramps with
+# training time (0.05 + very-imbalanced -> 0.4 + uniform), and each route file
+# carries a light within-episode ±10% demand ramp.
+CURRICULUM=True
+UPDATES_PER_STAGE = 1  # advance the difficulty every PPO update (smoothest ramp)
+
+# reward-reform knobs (see TrafficIntersectionEnvTripleLaneGUI.step):
+# score is hard-clipped to ±REWARD_CLIP and the spiky quadratic wait-term is cut.
+REWARD_CLIP = 200.0
+# A/B knob: obs-15 (with elapsed-green) vs obs-14 (AUG18 configuration).
+INCLUDE_ELAPSED_GREEN = True
 
 #times
 MIN_GREEN_TIME=30
@@ -35,14 +50,17 @@ N_EVAL_ENVS = 2
 
 # Hyper-Parameters
 VERBOSE=1
-BATCH_SIZE=64
-N_STEPS=256
+BATCH_SIZE=256
+N_STEPS=2048
 N_EPOCHS=10
 ENT_COEFF=0.1
-GAMMA=0.8138
+GAMMA=0.99
+# Evaluation
+EVAL_FREQ=N_STEPS # evaluate after each training session
+EVAL_EPISODES=20 # run evaluation for 20 episodes
 
 
-def get_env(env_name = "TrafficIntersectionEnv{}LaneGUI-v1".format(TRAFFIC_INTERSECTION_TYPE.capitalize()), multi=True, use_gui=False, subprocess=True, n_envs=multiprocessing.cpu_count(), min_green=30, yellow_time=10, _seed=1, total_timesteps=TOTAL_TIMESTEPS_FOR_SUMO, generate_new_route_files: bool = True):
+def get_env(env_name = "TrafficIntersectionEnv{}LaneGUI-v1".format(TRAFFIC_INTERSECTION_TYPE.capitalize()), multi=True, use_gui=False, subprocess=True, n_envs=multiprocessing.cpu_count(), min_green=30, yellow_time=10, _seed=1, total_timesteps=TOTAL_TIMESTEPS_FOR_SUMO, generate_new_route_files: bool = True, base_seed: int | None = None,     forced_switch_penalty: float = 5.0, switch_penalty: float = 15.0, anti_starvation_threshold: float = 60.0, anti_starvation_penalty: float = 0.25, early_truncation_penalty: float = 50.0, passing_reward_weight: float = 1.0, waiting_time_reward_weight: float = 0.8, reward_scale: float = 100.0, reward_clip: float = REWARD_CLIP, queue_pressure_penalty: float = 0.2, curriculum: bool = False, curriculum_progress: float | None = None, include_elapsed_green: bool = INCLUDE_ELAPSED_GREEN):
 
     from custom_gym.envs.custom_env_dir.TrafficIntersectionEnvTripleLaneGUI import TrafficIntersectionEnvTripleLaneGUI
 
@@ -51,7 +69,20 @@ def get_env(env_name = "TrafficIntersectionEnv{}LaneGUI-v1".format(TRAFFIC_INTER
         "min_green": min_green,
         "yellow_time": yellow_time,
         "total_timesteps":total_timesteps,
-        "generate_new_route_files": generate_new_route_files
+        "generate_new_route_files": generate_new_route_files,
+        "forced_switch_penalty": forced_switch_penalty,
+        "switch_penalty": switch_penalty,
+        "anti_starvation_threshold": anti_starvation_threshold,
+        "anti_starvation_penalty": anti_starvation_penalty,
+        "early_truncation_penalty": early_truncation_penalty,
+        "passing_reward_weight": passing_reward_weight,
+        "waiting_time_reward_weight": waiting_time_reward_weight,
+        "reward_scale": reward_scale,
+        "reward_clip": reward_clip,
+        "queue_pressure_penalty": queue_pressure_penalty,
+        "curriculum": curriculum,
+        "curriculum_progress": curriculum_progress,
+        "include_elapsed_green": include_elapsed_green,
     }
 
     # startmethod based on the platform, fork for linux and forkserver for windows
@@ -62,7 +93,10 @@ def get_env(env_name = "TrafficIntersectionEnv{}LaneGUI-v1".format(TRAFFIC_INTER
         if subprocess:
             def make_env(env_id, seed):
                 def _init():
-                    env = Monitor(gym.make(env_id, **env_kwargs))
+                    env_kwargs_per_env = dict(env_kwargs)
+                    if base_seed is not None:
+                        env_kwargs_per_env["seed"] = base_seed + seed
+                    env = Monitor(gym.make(env_id, **env_kwargs_per_env))
                     # env.seed(seed)
                     return env
                 return _init
@@ -101,12 +135,47 @@ class TensorboardCallback(BaseCallback):
         self.logger.record("training:waiting_time", np.average([ info["waiting_time"] for info in self.locals["infos"]]))
         self.logger.record("training:vehicle_count", np.average([ info["last_step_vehicle_count"] for info in self.locals["infos"]]))
         self.logger.record("training:vehicle_entered", np.average([ info["vehicle_entered"] for info in self.locals["infos"]]))
+        self.logger.record("training:forced_switch", np.average([ info["forced_switch"] for info in self.locals["infos"]]))
+        self.logger.record("training:early_truncation", np.average([ info["early_truncation"] for info in self.locals["infos"]]))
+        self.logger.record("training:max_grn_duration", np.average([ info["max_grn_duration"] for info in self.locals["infos"]]))
+        for phase in range(4):
+            self.logger.record(
+                f"training:max_grn_phase_durn{phase}",
+                np.average([ info["max_grn_phase_durn"][phase] for info in self.locals["infos"]]),
+            )
 
         return True
 
 
     def _on_training_end(self) -> None:
         return super()._on_training_end()
+
+
+class CurriculumCallback(BaseCallback):
+    """Advance the shared curriculum progress after every 3rd PPO rollout
+    update. Envs (fork subprocesses) read the shared value on each reset, so
+    the between-episode difficulty rises with training time, not performance."""
+
+    def __init__(self, progress, total_timesteps: int, verbose=0):
+        super(CurriculumCallback, self).__init__(verbose)
+        self.progress = progress
+        self.total_updates = max(
+            int(total_timesteps / (N_STEPS * N_TRAIN_ENVS)), 1
+        )
+        self.update_count = 0
+        self.progress.value = 0.0
+
+    def _on_step(self) -> bool:
+        return True
+
+    def _on_rollout_end(self) -> bool:
+        self.update_count += 1
+        if self.update_count % UPDATES_PER_STAGE == 0:
+            self.progress.value = min(
+                self.update_count / self.total_updates, 1.0
+            )
+        return True
+
 
 def train():
     FILE = Path(__file__).resolve()
@@ -132,11 +201,33 @@ def train():
         "subprocess": True  # mightnot work with spawn start method
     }
 
-    # environment for training
-    env = get_env(env_name=env_name, **env_kwargs, use_gui=use_gui, n_envs=N_TRAIN_ENVS, generate_new_route_files=True, total_timesteps=int(TOTAL_TIMESTEPS_FOR_SUMO))
+    # shared curriculum progress; envs (fork subprocesses) read this at reset
+    curriculum_progress = multiprocessing.Value("d", 0.0)
 
-    # environment for evaluation
-    eval_env = get_env(env_name=env_name, **env_kwargs, use_gui=use_gui, n_envs=N_EVAL_ENVS, total_timesteps=int(EVAL_TIMESTEPS))
+    # environment for training
+    env = get_env(env_name=env_name, **env_kwargs, use_gui=use_gui, n_envs=N_TRAIN_ENVS, generate_new_route_files=True, total_timesteps=int(TOTAL_TIMESTEPS_FOR_SUMO), curriculum=CURRICULUM, curriculum_progress=curriculum_progress)
+
+    # reward-normalization layer: rescales the running return statistics so the
+    # shared value function is not chasing the curriculum's shifting reward
+    # magnitude (the cause of EV~0 / uniform policy in the Sep-2026 runs).
+    # Observations are intentionally NOT normalized (raw, real-world scale, so
+    # the trained policy is directly deployable via traffic.py).
+    env = VecNormalize(
+        env,
+        training=True,
+        norm_obs=False,
+        norm_reward=True,
+        clip_reward=10.0,
+        gamma=GAMMA,
+    )
+
+    # environment for evaluation (fixed 9-grid, no curriculum).
+    # Must ALSO be VecNormalize-wrapped (same shape as the training wrapper) or
+    # EvalCallback crashes on sync_envs_normalization at the first evaluation.
+    # norm_reward=False keeps the eval rewards raw (un-normalized) so
+    # eval/mean_reward stays comparable across runs.
+    eval_env = get_env(env_name=env_name, **env_kwargs, use_gui=use_gui, n_envs=N_EVAL_ENVS, total_timesteps=int(EVAL_TIMESTEPS), base_seed=42)
+    eval_env = VecNormalize(eval_env, training=False, norm_obs=False, norm_reward=False, gamma=GAMMA)
     
     # stable_baselines3.common.env_checker.check_env(env, warn=True, skip_render_check=True)
 
@@ -149,8 +240,8 @@ def train():
     save_path = Path(str(models_path) + "/{}-TrafficIntersection-{}LaneGUI-{}".format(startTime, TRAFFIC_INTERSECTION_TYPE.capitalize(), modelType).replace(":", "_")).resolve()
 
     # Use deterministic actions for evaluation   # Also saving the best model
-    eval_callback = EvalCallback(eval_env, eval_freq=256, log_path=log_path, best_model_save_path=save_path,
-                                    deterministic=True, render=False, verbose=1)
+    eval_callback = EvalCallback(eval_env, eval_freq=EVAL_FREQ, log_path=log_path, best_model_save_path=save_path,
+                                    deterministic=True, render=use_gui, verbose=VERBOSE, n_eval_episodes=EVAL_EPISODES)
 
     def save_on_exit(signum, frame):
         # save the model before exiting
@@ -160,7 +251,7 @@ def train():
 
     signal.signal(signal.SIGINT, save_on_exit)
 
-    callback_list = CallbackList([eval_callback, TensorboardCallback(save_path=save_path, log_path=log_path, save_steps=5000)])
+    callback_list = CallbackList([eval_callback, TensorboardCallback(save_path=save_path, log_path=log_path, save_steps=5000), CurriculumCallback(curriculum_progress, total_timesteps=int(TOTAL_TIMESTEPS_FOR_MODEL))])
     # ':' isn't a valid name in windows since it is used to differentiate drive
     model.learn(total_timesteps=int(TOTAL_TIMESTEPS_FOR_MODEL), reset_num_timesteps=False, log_interval=1, tb_log_name=f"{'GUI' if use_gui else 'CLI'}-{modelType}-{startTime}".replace(":", "_"), callback=callback_list)
     # saving the fully trained model

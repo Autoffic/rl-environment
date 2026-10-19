@@ -123,16 +123,26 @@ logging_output_folder = Path(str(ROOT) + "/logging_outputs").resolve()
 # path to save the model or load the model from
 models_path = Path(str(ROOT) + "/models").resolve()
 
+# Default to the most recent model; override with --model-path.
 # Here, formatting is done as to create error if wrong model is selected
 # as, there won't be same model trained at exact same time and upto same timesteps
-model_path = models_path.joinpath("2024-08-05 21_20_54.921009-TrafficIntersection-{}LaneGUI-ppo".format(TRAFFIC_INTERSECTION_TYPE.capitalize()), "best_model.zip").resolve()
+default_model_dir = "2026-08-16 18_16_57.412396-TrafficIntersection-{}LaneGUI-ppo".format(TRAFFIC_INTERSECTION_TYPE.capitalize())
+model_path = models_path.joinpath(default_model_dir, "best_model.zip").resolve()
 
-model = PPO.load(str(model_path))
+model = None
 
 
-def run(use_rl: bool = False, connection_label=None, unique_identifier: str | None = None):
+def load_model(path: str | Path = model_path):
+    """Load the PPO model from the given path (lazy, so --model-path takes effect)."""
+    global model
+    print(f"Loading model from {path}")
+    model = PPO.load(str(path))
+
+
+def run(use_rl: bool = False, connection_label=None, unique_identifier: str | None = None, total_timesteps: int | None = None):
     global LOG_TO_FILE, LOG_WAITING_TIME
 
+    horizon = total_timesteps if total_timesteps is not None else TOTAL_TIMESTEPS
     time_spent_on_inference = 0
     step_listener = None
     # is libsumo isn't used
@@ -189,7 +199,7 @@ def run(use_rl: bool = False, connection_label=None, unique_identifier: str | No
 
     if not undefined_intersection:
         metric_env = MetricEnv(lanes_to_observe=lanes_to_observe, conn=traci)
-        step_listener = StepListener(metric_env)
+        step_listener = StepListener(metric_env, junction=junction_with_lights)
 
     step = 0
     if not use_rl:  # if rl is turned off the continue without intervention
@@ -206,7 +216,7 @@ def run(use_rl: bool = False, connection_label=None, unique_identifier: str | No
                 .resolve()
                 .__str__(),
             )
-        while step < TOTAL_TIMESTEPS:
+        while step < horizon:
             if step == 0:  # setting the initial configuration
                 if not undefined_intersection:
                     traci.trafficlight.setPhase(junction_with_lights, 4)
@@ -282,7 +292,13 @@ def run(use_rl: bool = False, connection_label=None, unique_identifier: str | No
             )
         print("\n Reinforcement Learning is On. \n")
 
-        while step < TOTAL_TIMESTEPS:
+        # observation dimension comes from the loaded model:
+        # old 2024 models were trained on lane counts only (12 for triple),
+        # newer models also append phase index + elapsed green (14 for triple)
+        obs_dim = int(model.observation_space.shape[0])
+        elapsed_green = 0.0  # seconds the current green phase has been active
+
+        while step < horizon:
             if step == 0:  # setting the initial configuration
 
                 if not undefined_intersection:
@@ -357,9 +373,13 @@ def run(use_rl: bool = False, connection_label=None, unique_identifier: str | No
 
                 current_state = traci.trafficlight.getPhase(junction_with_lights)
 
-                lanes_observation = numpy.zeros(lanes_to_observe.__len__())
+                lanes_observation = numpy.zeros(obs_dim)
                 for i, lane in enumerate(lanes_to_observe):
                     lanes_observation[i] = traci.lane.getLastStepVehicleNumber(lane)
+                # newer models also expect the current green phase index and its elapsed time
+                if obs_dim > lanes_to_observe.__len__():
+                    lanes_observation[lanes_to_observe.__len__()] = current_state // 2
+                    lanes_observation[lanes_to_observe.__len__() + 1] = elapsed_green
 
                 before_prediction = time.time()
                 next_configuration, _state = model.predict(
@@ -372,6 +392,7 @@ def run(use_rl: bool = False, connection_label=None, unique_identifier: str | No
                     next_configuration == current_state / 2
                 ):  # dividing by 2 as green phases is 0, 2, 4, 6
                     traci.trafficlight.setPhase(junction_with_lights, current_state)
+                    held_phase = True
                 else:
                     # Trying to turn on yellow light
                     delta_yellow_time = 0
@@ -379,6 +400,7 @@ def run(use_rl: bool = False, connection_label=None, unique_identifier: str | No
                     while delta_yellow_time < YELLOW_TIME:
                         traci.simulationStep()
                         delta_yellow_time += 1
+                    held_phase = False
             else:
                 undefined_intersection = True
                 print(f"The given intersection {TRAFFIC_INTERSECTION_TYPE} is not defined.")
@@ -403,10 +425,35 @@ def run(use_rl: bool = False, connection_label=None, unique_identifier: str | No
                 traci.simulationStep()
                 delta_green_time += 1
 
-            step = traci.simulation.getTime()
+            # update the age of the current green phase for the next observation
+            if TRAFFIC_INTERSECTION_TYPE == "triple" and not undefined_intersection:
+                if held_phase:
+                    elapsed_green += MIN_GREEN_TIME
+                else:
+                    elapsed_green = MIN_GREEN_TIME
 
-        if step >= TOTAL_TIMESTEPS:
+            step = traci.simulation.getTime()
+        if step >= horizon:
             print(f"Total time spend in inference by model: {time_spent_on_inference}")
+
+    # write per-phase max green-duration statistics
+    if (
+        LOG_TO_FILE
+        and LOG_WAITING_TIME
+        and not undefined_intersection
+        and step_listener is not None
+    ):
+        green_output_file = (
+            output_file.rsplit(".waiting-time.csv", 1)[0] + ".green-duration.csv"
+        )
+        with open(green_output_file, "w") as f:
+            f.write("phase,max_green_duration,switch_count\n")
+            for phase in range(4):
+                f.write(
+                    f"{phase},{step_listener.max_green_per_phase[phase]},"
+                    f"{step_listener.switch_count_per_phase[phase]}\n"
+                )
+
 
 
 def start_logging(
@@ -418,8 +465,13 @@ def start_logging(
     log_percentage_vehicle_passing: bool = LOG_PERCENTAGE_VEHICLE_PASSING,
     total_timesteps: int = TOTAL_TIMESTEPS,
     traffic_intersection_type: str = TRAFFIC_INTERSECTION_TYPE,
+    model_path: str | Path = model_path,
+    route_file_path: str | Path | None = None,
 ) -> Path | None:
     global net_file, route_file, sumocfg_file, additional_file_rl, additional_file_no_rl, logging_output_folder
+
+    if route_file_path is not None:
+        route_file = str(route_file_path)
 
     if log_to_file and log_percentage_vehicle_passing:
         output_file = (
@@ -494,7 +546,12 @@ def start_logging(
             label=connection_label,
         )
 
-    run(use_rl=use_rl, connection_label=connection_label, unique_identifier=unique_identifier)
+    # load the model inside this process so --model-path (set in the parent)
+    # is honored even under forkserver/spawn where the module is re-imported
+    if use_rl:
+        load_model(model_path)
+
+    run(use_rl=use_rl, connection_label=connection_label, unique_identifier=unique_identifier, total_timesteps=total_timesteps)
 
     if connection_label is not None and ("LIBSUMO_AS_TRACI" not in os.environ or os.environ["LIBSUMO_AS_TRACI"] != "1"):
         traci.switch(connection_label)
@@ -539,6 +596,12 @@ def get_options():
                     default=False, help="turn off the reinforcement learning inference and continue using only sumo")
     optParser.add_option("--generate-both-outputs", action="store_true",
                     default=False, help="generate both rl and no rl outputs with same id")
+    optParser.add_option("--model-path", default=None,
+                    help="path to the model .zip to use for RL inference (overrides the default)")
+    optParser.add_option("--route-file", default=None,
+                    help="path to the route .rou.xml to simulate (overrides the default test route)")
+    optParser.add_option("--sim-steps", default=None, type="int",
+                    help="number of SUMO timesteps to simulate (default %d)" % TOTAL_TIMESTEPS)
     options, args = optParser.parse_args()
     return options
 
@@ -551,6 +614,9 @@ def start(
     convert_file_to_csv=True,
     turn_off_rl=False,
     generate_both_outputs=True,
+    model_path=None,
+    route_file=None,
+    sim_steps=None,
 ):
     # for checking availability of gpu
     gpu_available = torch.cuda.is_available()
@@ -590,12 +656,17 @@ def start(
         "unique_identifier": common_time,
         "convert_file_to_csv": convert_file_to_csv,
         "log_percentage_vehicle_passing": LOG_PERCENTAGE_VEHICLE_PASSING,
-        "total_timesteps": TOTAL_TIMESTEPS,
+        "total_timesteps": sim_steps if sim_steps is not None else TOTAL_TIMESTEPS,
         "traffic_intersection_type": TRAFFIC_INTERSECTION_TYPE
     }
 
     rl_kwargs = no_rl_kwargs.copy()
     rl_kwargs["use_rl"] = True
+    if model_path is not None:
+        rl_kwargs["model_path"] = model_path
+    if route_file is not None:
+        rl_kwargs["route_file_path"] = route_file
+        no_rl_kwargs["route_file_path"] = route_file
 
     if not os.path.exists(logging_output_folder):
         os.mkdir(logging_output_folder)
@@ -658,9 +729,16 @@ class MetricEnv():
 
 class StepListener(traci.StepListener):
 
-    def __init__(self, env: MetricEnv) -> None:
+    def __init__(self, env: MetricEnv, junction: str = "J1") -> None:
         super().__init__()
         self.env = env
+        self.junction = junction
+        # green-phase duration tracking: a transition leaving an even (green)
+        # phase marks the end of that phase's green duration
+        self._last_phase: int | None = None
+        self._green_start: int = 0
+        self.max_green_per_phase: list[float] = [0.0] * 4
+        self.switch_count_per_phase: list[int] = [0] * 4
 
     def step(self, env=None):
 
@@ -673,6 +751,22 @@ class StepListener(traci.StepListener):
         self.env.total_vehicle_count = len(self.env.vehicle_ids)
 
         self.env.vehicle_ids_between_steps.update(last_step_vehicle_ids)
+
+        phase = int(self.env.conn.trafficlight.getPhase(self.junction))
+        now = self.env.conn.simulation.getTime()
+        if self._last_phase is not None and phase != self._last_phase:
+            if self._last_phase % 2 == 0:  # leaving a green phase -> it just ended
+                phase_index = self._last_phase // 2
+                duration = now - self._green_start
+                self.max_green_per_phase[phase_index] = max(
+                    self.max_green_per_phase[phase_index], duration
+                )
+                self.switch_count_per_phase[phase_index] += 1
+            if phase % 2 == 0:  # entering a green phase -> start the clock
+                self._green_start = now
+        elif self._last_phase is None and phase % 2 == 0:
+            self._green_start = now
+        self._last_phase = phase
         return True
     
     def clear_last_step_vehicle_ids(self):
