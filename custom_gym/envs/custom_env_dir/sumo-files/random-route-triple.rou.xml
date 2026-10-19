@@ -1,0 +1,75 @@
+             <routes>
+                 <vType id="car"
+                         vClass="passenger" length="5" accel="4.679637221626344" decel="4.422829529459964"
+                         sigma="1.0" maxSpeed="10"/>
+             
+                 <vType id="car-EW"
+                         vClass="passenger" length="5" accel="1.961012354674946" decel="-0.47064070790594137"
+                         sigma="1.0" maxSpeed="10"/>
+             
+                 <vType id="motorcycle"
+                         vClass="motorcycle" length="3" accel="4.238761751612415" decel="0.7612382483875848"" guiShape="motorcycle"
+                         sigma="1.0" maxSpeed="10"/>
+             
+                 <vType id="motorcycle-EW"
+                         vClass="motorcycle" length="3" accel="1.961012354674946" decel="2.4542898986758113"" guiShape="motorcycle"
+                         sigma="1.0" maxSpeed="10"/>
+             
+                 <vType id="truck"
+                         vClass="truck" length="6" accel="1.961012354674946" decel="3.038987645325054" guiShape="truck"
+                         sigma="1.0" maxSpeed="7"/>
+             
+                 <vType id="truck-dup1"
+                         vClass="truck" length="6" accel="3.6843086675603427" decel="4.422829529459964" guiShape="truck"
+                         sigma="1.0" maxSpeed="7"/>
+             
+                 <vType id="truck-EW"
+                         vClass="truck" length="6" accel="5.470640707905941" decel="1.3156913324396573" guiShape="truck"
+                         sigma="1.0" maxSpeed="7"/>
+             
+             <vType id="ev"
+                         vClass="emergency" length="7" accel="4.645865917032446" decel="-0.47064070790594137"sigma="1.0"
+                         maxSpeed="20" guiShape="emergency" speedFactor="2.0"
+                         minGapLat="0.2"/>
+             
+                 <vType id="ev-EW"
+                         vClass="emergency" length="7" accel="4.238761751612415" decel="1.3156913324396573"sigma="1.0"
+                         maxSpeed="20" guiShape="emergency" speedFactor="2.0"
+                         minGapLat="0.2"/>
+             
+                 <vType id="bus"
+                         vClass="bus" length="8" accel="4.645865917032446" decel="0.7612382483875848" guiShape="bus"
+                         sigma="1.0" maxSpeed="9"/>
+             
+                 <vType id="bus-dup1"
+                         vClass="bus" length="8" accel="2.5457101013241887" decel="0.7612382483875848" guiShape="bus"
+                         sigma="1.0" maxSpeed="9"/>
+             
+                 <vType id="bus-EW"
+                         vClass="bus" length="8" accel="1.6564263089901288" decel="2.4542898986758113" guiShape="bus"
+                         sigma="1.0" maxSpeed="9"/>
+             
+                 <interval begin="0" end="100000">
+                     <!-- Originating from left-->
+                     <flow id="car"   departLane="0" from="E0" to="E1" number="3200.67"/>
+                     <flow id="truck" departLane="1" from="E0" to="E2" number="3200.67"/>
+                     <flow id="bus"   departLane="2" from="E0" to="E3" number="3297.6600000000003"/>
+             
+                     <!-- Originating from up-->
+                     <flow id="ev"            departLane="2" from="-E1" to="-E0" number="13698.300000000001"/>
+                     <flow id="motorcycle"    departLane="0" from="-E1" to="E2" number="13698.300000000001"/>
+                     <flow id="motorcycle-EW" departLane="1" from="-E1" to="E3" number="14113.400000000001"/>
+             
+                     <!-- Originating from right-->
+                     <flow id="car-EW"     departLane="1" from="-E2" to="-E0" number="25948.89"/>
+                     <flow id="truck-EW"   departLane="2" from="-E2" to="E1" number="25948.89"/>
+                     <flow id="bus-EW"     departLane="0" from="-E2" to="E3" number="26735.22"/>
+             
+                     <!-- Originatin from down-->
+                     <flow id="ev-EW"      departLane="0" from="-E3" to="-E0" number="987.0300000000001"/>
+                     <flow id="truck-dup1" departLane="1" from="-E3" to="E1" number="987.0300000000001"/>
+                     <flow id="bus-dup1"   departLane="2" from="-E3" to="E2" number="1016.94"/>
+             
+                 </interval>
+             
+             </routes> 

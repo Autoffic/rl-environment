@@ -1,5 +1,5 @@
 
-from gym.envs.registration import register
+from gymnasium.envs.registration import register
 
 register(id='TrafficIntersectionEnvDoubleLaneGUI-v1',
     entry_point='envs.custom_env_dir:TrafficIntersectionEnvDoubleLaneGUI'
