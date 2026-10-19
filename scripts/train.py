@@ -50,7 +50,7 @@ def get_env(env_name = "TrafficIntersectionEnv{}LaneGUI-v1".format(TRAFFIC_INTER
             def make_env(env_id, seed):
                 def _init():
                     env = Monitor(gym.make(env_id, **env_kwargs))
-                    env.seed(seed)
+                    # env.seed(seed)
                     return env
                 return _init
 
@@ -115,11 +115,11 @@ def train():
 
     env_kwargs = {
         "multi": True,
-        "subprocess": False
+        "subprocess": True  # mightnot work with spawn start method
     }
 
     # environment for training
-    env = get_env(env_name=env_name, **env_kwargs, use_gui=use_gui, n_envs=5, generate_new_route_files=False)
+    env = get_env(env_name=env_name, **env_kwargs, use_gui=use_gui, n_envs=5, generate_new_route_files=True)
 
     # environment for evaluation
     eval_env = get_env(env_name=env_name, **env_kwargs, use_gui=use_gui, n_envs=2, total_timesteps=128)
