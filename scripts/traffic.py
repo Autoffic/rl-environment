@@ -45,6 +45,13 @@ if "SUMO_HOME" in os.environ:
 else:
     sys.exit("please declare environment variable 'SUMO_HOME'")
 
+# observation encoding expected by the loaded model, tied to the code
+# generation that trained it:
+#   "v2026_09" -> [lane fractions, total, phase, elapsed]  (current)
+#   "v2026_08" -> [raw lane counts, phase, elapsed]        (Aug-2026)
+# models with obs_dim <= number of observed lanes get raw counts either way
+OBS_LAYOUT = "v2026_09"
+
 import sumo
 import sumo.tools.sumolib as sumolib
 from sumo.tools import traci
@@ -373,13 +380,30 @@ def run(use_rl: bool = False, connection_label=None, unique_identifier: str | No
 
                 current_state = traci.trafficlight.getPhase(junction_with_lights)
 
+                n_lanes = lanes_to_observe.__len__()
+                lane_counts = [
+                    traci.lane.getLastStepVehicleNumber(lane)
+                    for lane in lanes_to_observe
+                ]
                 lanes_observation = numpy.zeros(obs_dim)
-                for i, lane in enumerate(lanes_to_observe):
-                    lanes_observation[i] = traci.lane.getLastStepVehicleNumber(lane)
-                # newer models also expect the current green phase index and its elapsed time
-                if obs_dim > lanes_to_observe.__len__():
-                    lanes_observation[lanes_to_observe.__len__()] = current_state // 2
-                    lanes_observation[lanes_to_observe.__len__() + 1] = elapsed_green
+                if obs_dim <= n_lanes:
+                    for i, count in enumerate(lane_counts):
+                        lanes_observation[i] = count
+                else:
+                    total = max(sum(lane_counts), 1)
+                    if OBS_LAYOUT == "v2026_08":
+                        for i, count in enumerate(lane_counts):
+                            lanes_observation[i] = count
+                        lanes_observation[n_lanes] = current_state // 2
+                        if obs_dim > n_lanes + 1:
+                            lanes_observation[n_lanes + 1] = elapsed_green
+                    else:
+                        for i, count in enumerate(lane_counts):
+                            lanes_observation[i] = count / total
+                        lanes_observation[n_lanes] = total
+                        lanes_observation[n_lanes + 1] = current_state // 2
+                        if obs_dim > n_lanes + 2:
+                            lanes_observation[n_lanes + 2] = elapsed_green
 
                 before_prediction = time.time()
                 next_configuration, _state = model.predict(

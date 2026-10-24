@@ -48,9 +48,10 @@ DENSITIES = [0.1, 0.2, 0.4]
 HORIZON = 2000
 
 
-def run_one(tag, use_rl, route_path, model_path=None, horizon=HORIZON):
+def run_one(tag, use_rl, route_path, model_path=None, horizon=HORIZON, obs_layout="v2026_09"):
     import traffic as tr
 
+    tr.OBS_LAYOUT = obs_layout
     tr.LOG_TO_FILE = True
     tr.LOG_WAITING_TIME = True
     tr.use_gui = False
@@ -112,13 +113,43 @@ def run_one(tag, use_rl, route_path, model_path=None, horizon=HORIZON):
     }
 
 
+def parse_args():
+    import argparse
+
+    p = argparse.ArgumentParser(
+        description="Sweep no-RL vs RL models across the test route grid."
+    )
+    p.add_argument("--horizon", type=int, default=HORIZON)
+    p.add_argument("--out", type=pathlib.Path, default=ROOT / "sweep_results")
+    p.add_argument(
+        "--new-model",
+        type=str,
+        default=NEW_MODEL,
+        help="path to the model used as the rl_2026 column",
+    )
+    p.add_argument(
+        "--obs-layout",
+        choices=["v2026_08", "v2026_09"],
+        default="v2026_09",
+        help="observation encoding expected by --new-model",
+    )
+    return p.parse_args()
+
+
 def main():
-    horizon = HORIZON
-    out_dir = ROOT / "sweep_results"
+    args = parse_args()
+    horizon = args.horizon
+    out_dir = args.out
     out_dir.mkdir(parents=True, exist_ok=True)
 
     import traffic as tr  # ensure module importable once for env registration
     del tr
+
+    print(f"new model: {args.new_model}")
+    print(f"old model: {OLD_MODEL}")
+    print(f"horizon:   {horizon}")
+    print(f"obs layout:{args.obs_layout}")
+    print(f"output:    {out_dir}", flush=True)
 
     results = {}
     for regime in REGIMES:
@@ -126,7 +157,14 @@ def main():
         for density in DENSITIES:
             route = ROOT / "sumo-files" / "test-routes" / f"{regime}-{density}.rou.xml"
             print(f"[{regime} {density}]", flush=True)
-            rl_new = run_one(f"new-{regime}-{density}", True, route, NEW_MODEL, horizon)
+            rl_new = run_one(
+                f"new-{regime}-{density}",
+                True,
+                route,
+                args.new_model,
+                horizon,
+                args.obs_layout,
+            )
             rl_old = run_one(f"old-{regime}-{density}", True, route, OLD_MODEL, horizon)
             norl = run_one(f"norl-{regime}-{density}", False, route, None, horizon)
             results[regime][density] = {"no_rl": norl, "rl_2026": rl_new, "rl_2024": rl_old}

@@ -246,10 +246,9 @@ class TrafficIntersectionEnvTripleLaneGUI(gym.Env):
 
         forced_switch = False
         info["forced_switch"] = False
-
-        # if it's the same phase, then don't turn on yellow light
+        # enable force switch only if green time is in observation
         if (
-            float(action) == current_state / 2
+            self.include_elapsed_green and  float(action) == current_state / 2
         ):  # dividing by 2 as green phases is 0, 2, 4, 6
             # holding the same phase past max_green is forbidden: force a switch
             if self.elapsed_green + self.min_green > self.max_green:
@@ -257,6 +256,7 @@ class TrafficIntersectionEnvTripleLaneGUI(gym.Env):
                 forced_switch = True
                 info["forced_switch"] = True
 
+        # if it's the same phase, then don't turn on yellow light
         turn_yellow = True
         if (
             float(action) == current_state / 2
